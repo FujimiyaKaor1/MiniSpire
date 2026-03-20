@@ -15,6 +15,9 @@ Used files:
 - assets/images/cards/power.png <- color/618x618/2728.png
 - assets/images/ui/logo.png <- color/618x618/1F5E1.png
 - assets/images/ui/intent.png <- color/618x618/1F3AF.png
+- assets/images/ui/start.png <- color/618x618/25B6.png
+- assets/images/ui/exit.png <- color/618x618/274C.png
+- assets/images/ui/thanks.png <- color/618x618/1F64F.png
 - assets/images/enemies/enemy1.png <- color/618x618/1F41B.png
 - assets/images/enemies/enemy2.png <- color/618x618/1F9D9-200D-2642-FE0F.png
 - assets/images/enemies/enemy3.png <- color/618x618/1F577.png

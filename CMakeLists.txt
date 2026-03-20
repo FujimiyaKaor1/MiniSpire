@@ -35,7 +35,7 @@ add_custom_command(TARGET MiniSpireSFML POST_BUILD
 )
 
 if (MSVC)
-    target_compile_options(MiniSpireSFML PRIVATE /W4 /permissive-)
+    target_compile_options(MiniSpireSFML PRIVATE /W4 /permissive- /utf-8)
 else()
     target_compile_options(MiniSpireSFML PRIVATE -Wall -Wextra -Wpedantic)
 endif()
