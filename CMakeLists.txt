@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(MiniSpireSFML LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -25,7 +27,12 @@ add_executable(MiniSpireSFML
     src/main.cpp
 )
 
+add_executable(MiniSpireSelfTest
+    src/main.cpp
+)
+
 target_link_libraries(MiniSpireSFML PRIVATE sfml-graphics sfml-window sfml-system)
+target_link_libraries(MiniSpireSelfTest PRIVATE sfml-graphics sfml-window sfml-system)
 
 # Copy SFML runtime files beside the exe so launching from the build folder works.
 add_custom_command(TARGET MiniSpireSFML POST_BUILD
@@ -36,6 +43,16 @@ add_custom_command(TARGET MiniSpireSFML POST_BUILD
 
 if (MSVC)
     target_compile_options(MiniSpireSFML PRIVATE /W4 /permissive- /utf-8)
+    target_compile_options(MiniSpireSelfTest PRIVATE /W4 /permissive- /utf-8)
 else()
     target_compile_options(MiniSpireSFML PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(MiniSpireSelfTest PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
+if (BUILD_TESTING)
+    add_test(NAME smoke_self_test COMMAND MiniSpireSelfTest --self-test)
+    set_tests_properties(smoke_self_test PROPERTIES
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:MiniSpireSelfTest>
+        ENVIRONMENT "PATH=${CMAKE_BINARY_DIR}/_deps/sfml-build/lib;$ENV{PATH}"
+    )
 endif()

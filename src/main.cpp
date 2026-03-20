@@ -15,7 +15,9 @@
 #include <vector>
 
 enum class CardType { Attack, Skill, Power };
-enum class Phase { MainMenu, Battle, Reward, VictoryThanks, Credits, Defeat };
+enum class Phase { MainMenu, Battle, Reward, Campfire, Shop, Event, DeckEdit, VictoryThanks, Credits, Defeat };
+enum class RoomType { Battle, Campfire, Shop, Event };
+enum class DeckEditMode { None, UpgradeOne, RemoveOne, RemoveTwo };
 
 struct CardDef {
     int id;
@@ -34,6 +36,13 @@ struct CardDef {
     bool exhaust;
     bool grantsStrengthPerTurn;
     std::string desc;
+    bool healFromDamage = false;
+};
+
+struct FloorNode {
+    RoomType type = RoomType::Battle;
+    int enemyIndex = -1;
+    int eventId = 0;
 };
 
 struct Intent {
@@ -99,6 +108,39 @@ struct AppConfig {
 
 class Game {
 public:
+    static bool runSelfTest(std::ostream& out) {
+        bool success = true;
+        auto expect = [&](bool condition, const char* name) {
+            out << (condition ? "[OK] " : "[FAIL] ") << name << '\n';
+            success = success && condition;
+        };
+
+        expect(parseBool("true"), "parseBool true");
+        expect(parseBool("YES"), "parseBool yes");
+        expect(!parseBool("off"), "parseBool off");
+
+        const AppConfig parsed = parseConfigLines(
+            {
+                "max_fps=999",
+                "enable_animations=off",
+                "enable_floating_text=yes",
+                "text_scale=0.2",
+                "text_scale=1.4"
+            },
+            nullptr);
+
+        expect(parsed.maxFps == 240u, "max_fps clamp");
+        expect(!parsed.enableAnimations, "enable_animations parse");
+        expect(parsed.enableFloatingText, "enable_floating_text parse");
+        expect(std::fabs(parsed.textScale - 1.4f) < 0.0001f, "text_scale parse");
+
+        expect(isValidTransition(Phase::MainMenu, Phase::Battle), "phase transition main menu -> battle");
+        expect(!isValidTransition(Phase::Reward, Phase::Credits), "phase transition reward -> credits invalid");
+
+        out << (success ? "SELF_TEST_PASS" : "SELF_TEST_FAIL") << '\n';
+        return success;
+    }
+
     Game()
         : window(sf::VideoMode(1280, 720), "迷你尖塔 Demo"),
           rng(static_cast<std::mt19937::result_type>(std::random_device{}())) {
@@ -152,10 +194,15 @@ private:
 
     std::vector<CardDef> cardPool;
     std::unordered_map<int, CardDef> cardsById;
+    std::vector<int> baseCardIds;
     std::vector<EnemyDef> enemySequence;
+    std::vector<FloorNode> floorPlan;
+    std::vector<int> shopChoices;
 
     Phase phase = Phase::MainMenu;
-    int battleIndex = 0;
+    int currentFloor = 0;
+    int currentEnemyIndex = 0;
+    int currentEventId = 0;
     float phaseTimer = 0.0f;
 
     Combatant player;
@@ -165,7 +212,14 @@ private:
     int playerEnergy = 3;
     int playerStrengthPerTurn = 0;
     int totalWins = 0;
+    int gold = 99;
     int potionCount = 1;
+    int potionMax = 4;
+    int potionCapacityPrice = 85;
+    int deckRemovePrice = 70;
+    bool campfireDidAction = false;
+    DeckEditMode deckEditMode = DeckEditMode::None;
+    int deckEditRemaining = 0;
 
     std::vector<int> masterDeck;
     std::vector<int> drawPile;
@@ -185,12 +239,22 @@ private:
     sf::FloatRect menuStartRect{470.f, 320.f, 340.f, 82.f};
     sf::FloatRect menuExitRect{470.f, 430.f, 340.f, 82.f};
     sf::FloatRect backMenuRect{470.f, 560.f, 340.f, 72.f};
+    sf::FloatRect campRestRect{270.f, 320.f, 320.f, 90.f};
+    sf::FloatRect campForgeRect{700.f, 320.f, 320.f, 90.f};
+    sf::FloatRect shopPotionRect{940.f, 500.f, 280.f, 70.f};
+    sf::FloatRect shopRemoveRect{940.f, 590.f, 280.f, 70.f};
+    sf::FloatRect shopLeaveRect{940.f, 410.f, 280.f, 70.f};
+    sf::FloatRect eventLeftRect{180.f, 500.f, 430.f, 120.f};
+    sf::FloatRect eventRightRect{670.f, 500.f, 430.f, 120.f};
+    sf::FloatRect deckDoneRect{1000.f, 620.f, 230.f, 70.f};
 
     float enemyHitFlashTimer = 0.0f;
     float playerHitFlashTimer = 0.0f;
     float turnBannerTimer = 0.0f;
     int hoveredCardIndex = -1;
     bool enableCombatAnimations = true;
+    Phase deckEditReturnPhase = Phase::MainMenu;
+    bool deckEditAdvanceAfterDone = false;
 
     static constexpr const char* kSavePath = "save_progress.dat";
     static constexpr const char* kConfigPath = "game_config.ini";
@@ -215,6 +279,46 @@ private:
         return lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on";
     }
 
+    static void applyConfigEntry(AppConfig& target, const std::string& key, const std::string& value, std::ostream* warnOut) {
+        try {
+            if (key == "max_fps") {
+                const int parsed = std::stoi(value);
+                target.maxFps = static_cast<unsigned int>(std::clamp(parsed, 30, 240));
+            } else if (key == "enable_animations") {
+                target.enableAnimations = parseBool(value);
+            } else if (key == "enable_floating_text") {
+                target.enableFloatingText = parseBool(value);
+            } else if (key == "text_scale") {
+                const float parsed = std::stof(value);
+                target.textScale = std::clamp(parsed, 0.8f, 1.5f);
+            }
+        } catch (...) {
+            if (warnOut != nullptr) {
+                *warnOut << "[warn] 配置项解析失败: " << key << "=" << value << '\n';
+            }
+        }
+    }
+
+    static AppConfig parseConfigLines(const std::vector<std::string>& lines, std::ostream* warnOut) {
+        AppConfig parsed;
+        for (const auto& line : lines) {
+            const std::string raw = trim(line);
+            if (raw.empty() || raw[0] == '#') {
+                continue;
+            }
+
+            const std::size_t pos = raw.find('=');
+            if (pos == std::string::npos) {
+                continue;
+            }
+
+            const std::string key = trim(raw.substr(0, pos));
+            const std::string value = trim(raw.substr(pos + 1));
+            applyConfigEntry(parsed, key, value, warnOut);
+        }
+        return parsed;
+    }
+
     void writeDefaultConfig() const {
         std::ofstream out(kConfigPath, std::ios::trunc);
         if (!out) {
@@ -234,47 +338,27 @@ private:
             return;
         }
 
+        std::vector<std::string> lines;
         std::string line;
         while (std::getline(in, line)) {
-            const std::string raw = trim(line);
-            if (raw.empty() || raw[0] == '#') {
-                continue;
-            }
-
-            const std::size_t pos = raw.find('=');
-            if (pos == std::string::npos) {
-                continue;
-            }
-
-            const std::string key = trim(raw.substr(0, pos));
-            const std::string value = trim(raw.substr(pos + 1));
-
-            try {
-                if (key == "max_fps") {
-                    const int parsed = std::stoi(value);
-                    config.maxFps = static_cast<unsigned int>(std::clamp(parsed, 30, 240));
-                } else if (key == "enable_animations") {
-                    config.enableAnimations = parseBool(value);
-                } else if (key == "enable_floating_text") {
-                    config.enableFloatingText = parseBool(value);
-                } else if (key == "text_scale") {
-                    const float parsed = std::stof(value);
-                    config.textScale = std::clamp(parsed, 0.8f, 1.5f);
-                }
-            } catch (...) {
-                std::cerr << "[warn] 配置项解析失败: " << key << "=" << value << '\n';
-            }
+            lines.push_back(line);
         }
+
+        config = parseConfigLines(lines, &std::cerr);
     }
 
-    bool isValidTransition(Phase from, Phase to) const {
+    static bool isValidTransition(Phase from, Phase to) {
         if (from == to) {
             return true;
         }
         switch (from) {
-            case Phase::MainMenu: return to == Phase::Battle;
+            case Phase::MainMenu: return to == Phase::Battle || to == Phase::Campfire || to == Phase::Shop || to == Phase::Event;
             case Phase::Battle: return to == Phase::Reward || to == Phase::Defeat || to == Phase::VictoryThanks || to == Phase::MainMenu;
-            case Phase::Reward: return to == Phase::Battle || to == Phase::MainMenu;
+            case Phase::Reward: return to == Phase::Battle || to == Phase::Campfire || to == Phase::Shop || to == Phase::Event || to == Phase::MainMenu;
+            case Phase::Campfire: return to == Phase::DeckEdit || to == Phase::Battle || to == Phase::Shop || to == Phase::Event || to == Phase::VictoryThanks;
+            case Phase::Shop: return to == Phase::DeckEdit || to == Phase::Battle || to == Phase::Campfire || to == Phase::Event || to == Phase::VictoryThanks;
+            case Phase::Event: return to == Phase::DeckEdit || to == Phase::Battle || to == Phase::Campfire || to == Phase::Shop || to == Phase::VictoryThanks;
+            case Phase::DeckEdit: return to == Phase::Campfire || to == Phase::Shop || to == Phase::Event || to == Phase::MainMenu;
             case Phase::VictoryThanks: return to == Phase::Credits;
             case Phase::Credits: return to == Phase::MainMenu;
             case Phase::Defeat: return to == Phase::MainMenu || to == Phase::Battle;
@@ -347,6 +431,10 @@ private:
     }
 
     void initCards() {
+        cardsById.clear();
+        cardPool.clear();
+        baseCardIds.clear();
+
         cardPool = {
             {1, "打击", CardType::Attack, 1, 6, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 6 点伤害"},
             {2, "防御", CardType::Skill, 1, 0, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡"},
@@ -367,8 +455,72 @@ private:
             {17, "暴走", CardType::Attack, 1, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害"},
             {18, "献祭", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 3, 1, 6, true, false, "失去 6 点生命，获得 1 点能量并抽 3 张牌，消耗"},
             {19, "壁垒", CardType::Skill, 2, 0, 1, 30, 0, 0, 0, 0, 0, 0, true, false, "获得 30 点格挡，消耗"},
-            {20, "恶魔形态", CardType::Power, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"}
+            {20, "恶魔形态", CardType::Power, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
+
+            {21, "快速检索", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, true, false, "抽 1 张牌，消耗"},
+            {22, "战术研读", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 0, 0, false, false, "抽 2 张牌"},
+            {23, "沉着", CardType::Skill, 1, 0, 1, 6, 0, 0, 0, 1, 0, 0, false, false, "获得 6 点格挡并抽 1 张牌"},
+            {24, "冲刺", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 3, 0, 0, true, false, "抽 3 张牌，消耗"},
+            {25, "窥探弱点", CardType::Skill, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, false, false, "施加 1 层易伤并抽 1 张牌"},
+            {26, "武器整备", CardType::Skill, 1, 0, 1, 5, 1, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡并获得 1 点力量"},
+            {27, "疾风连抽", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 4, 0, 0, true, false, "抽 4 张牌，消耗"},
+            {28, "应急补给", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 1, 0, true, false, "抽 2 张牌并获得 1 点能量，消耗"},
+
+            {29, "战斗专注", CardType::Power, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
+            {30, "护体术", CardType::Skill, 1, 0, 1, 12, 0, 0, 0, 0, 0, 0, true, false, "获得 12 点格挡，消耗"},
+            {31, "穿刺", CardType::Attack, 1, 12, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "造成 12 点伤害，消耗"},
+            {32, "双重格挡", CardType::Skill, 2, 0, 1, 18, 0, 0, 0, 0, 0, 0, true, false, "获得 18 点格挡，消耗"},
+            {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 1, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 1 层易伤，消耗"},
+            {34, "激昂", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, true, false, "获得 2 点力量，消耗"},
+            {35, "稳固阵线", CardType::Skill, 1, 0, 1, 10, 0, 0, 0, 0, 0, 0, true, false, "获得 10 点格挡，消耗"},
+            {36, "邪恶之刃", CardType::Attack, 2, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害并回复等量生命"}
         };
+
+        for (auto& c : cardPool) {
+            if (c.id == 36) {
+                c.healFromDamage = true;
+            }
+        }
+
+        std::vector<CardDef> upgradedCards;
+        upgradedCards.reserve(cardPool.size());
+        for (const auto& base : cardPool) {
+            baseCardIds.push_back(base.id);
+
+            CardDef up = base;
+            up.id = 100 + base.id;
+            up.name = base.name + "+";
+            if (up.cost > 1) {
+                up.cost -= 1;
+            }
+            if (up.damage > 0) {
+                up.damage += 3;
+            }
+            if (up.block > 0) {
+                up.block += 3;
+            }
+            if (up.draw > 0) {
+                up.draw += 1;
+            }
+            if (up.gainStrength > 0) {
+                up.gainStrength += 1;
+            }
+            if (up.applyWeak > 0) {
+                up.applyWeak += 1;
+            }
+            if (up.applyVulnerable > 0) {
+                up.applyVulnerable += 1;
+            }
+            if (up.loseHp > 0) {
+                up.loseHp = std::max(0, up.loseHp - 2);
+            }
+            up.desc += "（升级）";
+            upgradedCards.push_back(up);
+        }
+
+        for (const auto& up : upgradedCards) {
+            cardPool.push_back(up);
+        }
 
         for (const auto& c : cardPool) {
             cardsById[c.id] = c;
@@ -391,12 +543,43 @@ private:
             {{"施加虚弱 1 + 攻击 6", 6, 1, 0, 0, 1, 0}, {"攻击 8", 8, 1, 0, 0, 0, 0}, {"格挡 8", 0, 1, 8, 0, 0, 0}}});
 
         enemySequence.push_back({
+            "普通敌人：刀盾卫兵", 56, false, false,
+            {{"攻击 9", 9, 1, 0, 0, 0, 0}, {"格挡 10", 0, 1, 10, 0, 0, 0}, {"攻击 6 x2", 6, 2, 0, 0, 0, 0}}});
+
+        enemySequence.push_back({
             "精英敌人：装甲骑士", 78, true, false,
             {{"格挡 10 + 强化 +1 力量", 0, 1, 10, 1, 0, 0}, {"攻击 12", 12, 1, 0, 0, 0, 0}, {"攻击 7 x2", 7, 2, 0, 0, 0, 0}, {"施加易伤 1 + 攻击 8", 8, 1, 0, 0, 0, 1}}});
 
         enemySequence.push_back({
+            "精英敌人：鲜血斗士", 92, true, false,
+            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"施加虚弱 2", 0, 1, 0, 0, 2, 0}}});
+
+        enemySequence.push_back({
+            "精英敌人：诅咒祭司", 104, true, false,
+            {{"施加易伤 2 + 攻击 8", 8, 1, 0, 0, 0, 2}, {"格挡 14", 0, 1, 14, 0, 0, 0}, {"攻击 12", 12, 1, 0, 0, 0, 0}, {"施加虚弱 2 + 攻击 7", 7, 1, 0, 0, 2, 0}}});
+
+        enemySequence.push_back({
             "BOSS：尖塔守卫", 120, false, true,
             {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"格挡 16 + 施加虚弱 1", 0, 1, 16, 0, 1, 0}, {"施加易伤 2 + 攻击 10", 10, 1, 0, 0, 0, 2}}});
+
+        floorPlan.clear();
+        floorPlan = {
+            {RoomType::Battle, 0, 0},
+            {RoomType::Battle, 1, 0},
+            {RoomType::Campfire, -1, 0},
+            {RoomType::Battle, 2, 0},
+            {RoomType::Battle, 4, 0},
+            {RoomType::Shop, -1, 0},
+            {RoomType::Battle, 3, 0},
+            {RoomType::Event, -1, 1},
+            {RoomType::Campfire, -1, 0},
+            {RoomType::Battle, 5, 0},
+            {RoomType::Shop, -1, 0},
+            {RoomType::Battle, 6, 0},
+            {RoomType::Event, -1, 2},
+            {RoomType::Campfire, -1, 0},
+            {RoomType::Battle, 7, 0}
+        };
     }
 
     void loadProgress() {
@@ -433,6 +616,215 @@ private:
         return &it->second;
     }
 
+    static bool isUpgradedCard(int id) {
+        return id >= 100;
+    }
+
+    static int baseCardId(int id) {
+        return isUpgradedCard(id) ? (id - 100) : id;
+    }
+
+    static int upgradedCardId(int id) {
+        return isUpgradedCard(id) ? id : (id + 100);
+    }
+
+    int cardPrice(int cardId) const {
+        const CardDef* c = findCard(cardId);
+        if (!c) {
+            return 90;
+        }
+        int price = 40 + c->cost * 18;
+        if (c->damage >= 12 || c->block >= 12 || c->draw >= 3 || c->grantsStrengthPerTurn) {
+            price += 30;
+        }
+        if (c->exhaust) {
+            price -= 5;
+        }
+        return std::clamp(price, 35, 180);
+    }
+
+    bool tryUpgradeDeckCard(int deckIndex) {
+        if (deckIndex < 0 || deckIndex >= static_cast<int>(masterDeck.size())) {
+            return false;
+        }
+        const int current = masterDeck[deckIndex];
+        if (isUpgradedCard(current)) {
+            pushLog("该卡牌已经升级");
+            return false;
+        }
+        const int target = upgradedCardId(current);
+        if (!findCard(target)) {
+            pushLog("该卡牌暂无升级版本");
+            return false;
+        }
+        masterDeck[deckIndex] = target;
+        const CardDef* after = findCard(target);
+        pushLog("锻造成功：" + (after ? after->name : std::string("已升级")));
+        return true;
+    }
+
+    void setupShopChoices() {
+        shopChoices.clear();
+        if (baseCardIds.empty()) {
+            return;
+        }
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(baseCardIds.size()) - 1);
+        while (shopChoices.size() < 8) {
+            const int id = baseCardIds[dist(rng)];
+            if (id == 1 || id == 2) {
+                continue;
+            }
+            if (std::find(shopChoices.begin(), shopChoices.end(), id) == shopChoices.end()) {
+                shopChoices.push_back(id);
+            }
+        }
+    }
+
+    void beginDeckEdit(DeckEditMode mode, Phase returnPhase, bool advanceAfterDone) {
+        deckEditMode = mode;
+        deckEditRemaining = (mode == DeckEditMode::RemoveTwo) ? 2 : 1;
+        deckEditReturnPhase = returnPhase;
+        deckEditAdvanceAfterDone = advanceAfterDone;
+        transitionTo(Phase::DeckEdit, "进入卡组编辑阶段");
+    }
+
+    void finishDeckEditIfDone() {
+        if (deckEditRemaining > 0) {
+            return;
+        }
+        transitionTo(deckEditReturnPhase, "卡组编辑完成");
+        if (deckEditAdvanceAfterDone) {
+            goNextFloor();
+        }
+        deckEditMode = DeckEditMode::None;
+        deckEditAdvanceAfterDone = false;
+    }
+
+    bool removeDeckCardAt(int deckIndex) {
+        if (deckIndex < 0 || deckIndex >= static_cast<int>(masterDeck.size())) {
+            return false;
+        }
+        const CardDef* c = findCard(masterDeck[deckIndex]);
+        pushLog("移除卡牌：" + (c ? c->name : std::string("未知")));
+        masterDeck.erase(masterDeck.begin() + deckIndex);
+        return true;
+    }
+
+    void tryBuyShopCard(int slot) {
+        if (slot < 0 || slot >= static_cast<int>(shopChoices.size())) {
+            return;
+        }
+        const int id = shopChoices[slot];
+        if (id <= 0) {
+            pushLog("该商品已售出");
+            return;
+        }
+        const int price = cardPrice(id);
+        if (gold < price) {
+            pushLog("金币不足，无法购买");
+            return;
+        }
+        gold -= price;
+        masterDeck.push_back(id);
+        const CardDef* c = findCard(id);
+        pushLog("购买卡牌：" + (c ? c->name : std::string("未知")) + "（-" + std::to_string(price) + " 金币）");
+        shopChoices[slot] = -1;
+    }
+
+    void tryBuyPotionCapacity() {
+        if (gold < potionCapacityPrice) {
+            pushLog("金币不足，无法提升药剂上限");
+            return;
+        }
+        gold -= potionCapacityPrice;
+        potionMax += 1;
+        pushLog("药剂上限提升至 " + std::to_string(potionMax) + "（-" + std::to_string(potionCapacityPrice) + " 金币）");
+        potionCapacityPrice += 45;
+    }
+
+    void tryBuyRemoveService() {
+        if (masterDeck.empty()) {
+            pushLog("牌组为空，无法移除");
+            return;
+        }
+        if (gold < deckRemovePrice) {
+            pushLog("金币不足，无法购买移除服务");
+            return;
+        }
+        gold -= deckRemovePrice;
+        pushLog("开始移除卡牌（-" + std::to_string(deckRemovePrice) + " 金币）");
+        deckRemovePrice += 30;
+        beginDeckEdit(DeckEditMode::RemoveOne, Phase::Shop, false);
+    }
+
+    void resolveEventChoice(int option) {
+        if (currentEventId == 1) {
+            if (option == 0) {
+                player.hp = std::max(0, player.hp - 10);
+                masterDeck.push_back(36);
+                pushLog("你失去 10 点生命，并获得 邪恶之刃");
+                if (player.hp <= 0) {
+                    transitionTo(Phase::Defeat, "事件中生命归零");
+                    return;
+                }
+                goNextFloor();
+                return;
+            }
+            gold += 100;
+            pushLog("你获得 100 金币");
+            goNextFloor();
+            return;
+        }
+
+        if (currentEventId == 2) {
+            if (option == 0) {
+                player.hp = std::max(0, player.hp - 12);
+                pushLog("你损失了 12 点生命");
+                if (player.hp <= 0) {
+                    transitionTo(Phase::Defeat, "事件中生命归零");
+                    return;
+                }
+                goNextFloor();
+                return;
+            }
+            beginDeckEdit(DeckEditMode::RemoveTwo, Phase::Event, true);
+        }
+    }
+
+    void enterCurrentFloor() {
+        if (currentFloor < 0 || currentFloor >= static_cast<int>(floorPlan.size())) {
+            transitionTo(Phase::VictoryThanks, "楼层完成后进入感谢页");
+            phaseTimer = 0.0f;
+            return;
+        }
+
+        campfireDidAction = false;
+        const FloorNode& node = floorPlan[currentFloor];
+        switch (node.type) {
+            case RoomType::Battle:
+                currentEnemyIndex = std::clamp(node.enemyIndex, 0, static_cast<int>(enemySequence.size()) - 1);
+                transitionTo(Phase::Battle, "进入战斗房间");
+                startBattle();
+                break;
+            case RoomType::Campfire:
+                transitionTo(Phase::Campfire, "进入营火房间");
+                break;
+            case RoomType::Shop:
+                setupShopChoices();
+                transitionTo(Phase::Shop, "进入商店房间");
+                break;
+            case RoomType::Event:
+                currentEventId = node.eventId;
+                transitionTo(Phase::Event, "进入事件房间");
+                break;
+        }
+    }
+
+    void goNextFloor() {
+        currentFloor++;
+        enterCurrentFloor();
+    }
+
     static Intent fallbackIntent() {
         return {"待机", 0, 1, 0, 0, 0, 0};
     }
@@ -446,7 +838,11 @@ private:
         player.vulnerable = 0;
 
         playerStrengthPerTurn = 0;
+        gold = 99;
         potionCount = 1;
+        potionMax = 4;
+        potionCapacityPrice = 85;
+        deckRemovePrice = 70;
         enemyHitFlashTimer = 0.0f;
         playerHitFlashTimer = 0.0f;
         turnBannerTimer = 0.0f;
@@ -462,6 +858,12 @@ private:
         floatingTexts.clear();
         pendingCard.active = false;
         pendingEnemy.active = false;
+        deckEditMode = DeckEditMode::None;
+        deckEditRemaining = 0;
+        deckEditReturnPhase = Phase::MainMenu;
+        deckEditAdvanceAfterDone = false;
+        shopChoices.clear();
+        currentEventId = 0;
 
         for (int i = 0; i < 4; ++i) {
             masterDeck.push_back(1);
@@ -473,11 +875,13 @@ private:
             masterDeck.push_back(5);
         }
         masterDeck.push_back(3);
+        masterDeck.push_back(21);
+        masterDeck.push_back(22);
 
-        battleIndex = 0;
-        phase = Phase::Battle;
+        currentFloor = 0;
+        phase = Phase::MainMenu;
         phaseTimer = 0.0f;
-        startBattle();
+        enterCurrentFloor();
     }
 
     void beginCardPlay(int handIndex) {
@@ -538,7 +942,7 @@ private:
     }
 
     void startBattle() {
-        if (battleIndex < 0 || battleIndex >= static_cast<int>(enemySequence.size())) {
+        if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             phase = Phase::MainMenu;
             return;
         }
@@ -559,7 +963,7 @@ private:
 
         enemyIntentIndex = 0;
 
-        const EnemyDef& def = enemySequence[battleIndex];
+        const EnemyDef& def = enemySequence[currentEnemyIndex];
         enemy.maxHp = def.maxHp;
         enemy.hp = def.maxHp;
         enemy.block = 0;
@@ -630,8 +1034,9 @@ private:
         }
 
         playerEnergy -= c->cost;
+        int totalDamageDealt = 0;
 
-        if (cardId == 16) {
+        if (baseCardId(cardId) == 16) {
             player.strength *= 2;
         }
 
@@ -644,10 +1049,21 @@ private:
             for (int i = 0; i < c->hits; ++i) {
                 const int dmg = adjustedDamage(c->damage, player, enemy);
                 dealDamage(enemy, dmg, false);
+                totalDamageDealt += dmg;
                 pushLog(c->name + " 造成 " + std::to_string(dmg) + " 点伤害");
                 if (enemy.hp <= 0) {
                     break;
                 }
+            }
+        }
+
+        if (c->healFromDamage && totalDamageDealt > 0) {
+            const int oldHp = player.hp;
+            player.hp = std::min(player.maxHp, player.hp + totalDamageDealt);
+            const int healed = player.hp - oldHp;
+            if (healed > 0) {
+                pushLog(c->name + " 回复 " + std::to_string(healed) + " 点生命");
+                spawnFloatingText("+" + std::to_string(healed) + " 生命", sf::Vector2f(260.f, 98.f), sf::Color(120, 255, 140), 0.9f);
             }
         }
 
@@ -709,9 +1125,10 @@ private:
 
     void onBattleWon() {
         pushLog("战斗胜利");
-        potionCount = std::min(4, potionCount + 1);
-        pushLog("获得 1 瓶药剂（当前 " + std::to_string(potionCount) + "）");
-        if (battleIndex == static_cast<int>(enemySequence.size()) - 1) {
+        potionCount = std::min(potionMax, potionCount + 1);
+        gold += 45;
+        pushLog("获得 45 金币与 1 瓶药剂（当前金币 " + std::to_string(gold) + "）");
+        if (currentFloor == static_cast<int>(floorPlan.size()) - 1) {
             totalWins++;
             saveProgress();
             transitionTo(Phase::VictoryThanks, "击败最终BOSS");
@@ -782,7 +1199,7 @@ private:
 
         enemy.block = 0;
 
-        const EnemyDef& def = enemySequence[battleIndex];
+        const EnemyDef& def = enemySequence[currentEnemyIndex];
         if (def.pattern.empty()) {
             pushLog("敌人行为模式为空，跳过敌方回合");
             if (startNextPlayerTurn) {
@@ -874,12 +1291,45 @@ private:
         return rects;
     }
 
+    std::vector<sf::FloatRect> shopCardRects() const {
+        std::vector<sf::FloatRect> rects;
+        const float cardW = 190.f;
+        const float cardH = 150.f;
+        const float gapX = 24.f;
+        const float gapY = 20.f;
+        const float startX = 80.f;
+        const float startY = 210.f;
+        for (int r = 0; r < 2; ++r) {
+            for (int c = 0; c < 4; ++c) {
+                rects.emplace_back(startX + c * (cardW + gapX), startY + r * (cardH + gapY), cardW, cardH);
+            }
+        }
+        return rects;
+    }
+
+    std::vector<sf::FloatRect> deckEditRects() const {
+        std::vector<sf::FloatRect> rects;
+        const float cardW = 150.f;
+        const float cardH = 86.f;
+        const float gapX = 12.f;
+        const float gapY = 10.f;
+        const float startX = 40.f;
+        const float startY = 140.f;
+        const int cols = 7;
+        for (size_t i = 0; i < masterDeck.size(); ++i) {
+            const int row = static_cast<int>(i) / cols;
+            const int col = static_cast<int>(i) % cols;
+            rects.emplace_back(startX + col * (cardW + gapX), startY + row * (cardH + gapY), cardW, cardH);
+        }
+        return rects;
+    }
+
     const Intent& currentEnemyIntent() const {
         static const Intent fallback = fallbackIntent();
-        if (battleIndex < 0 || battleIndex >= static_cast<int>(enemySequence.size())) {
+        if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             return fallback;
         }
-        const EnemyDef& def = enemySequence[battleIndex];
+        const EnemyDef& def = enemySequence[currentEnemyIndex];
         if (def.pattern.empty()) {
             return fallback;
         }
@@ -899,9 +1349,7 @@ private:
             pushLog("获得卡牌：未知卡牌");
         }
 
-        battleIndex++;
-        transitionTo(Phase::Battle, "奖励选牌后进入下一战");
-        startBattle();
+        goNextFloor();
     }
 
     void handleEvent(const sf::Event& event) {
@@ -987,6 +1435,92 @@ private:
                     pickReward(static_cast<int>(i));
                     return;
                 }
+            }
+        } else if (phase == Phase::Campfire) {
+            if (campRestRect.contains(mouse)) {
+                if (campfireDidAction) {
+                    pushLog("本层营火已使用");
+                    return;
+                }
+                const int oldHp = player.hp;
+                player.hp = std::min(player.maxHp, player.hp + 30);
+                pushLog("营火休息：回复 " + std::to_string(player.hp - oldHp) + " 点生命");
+                campfireDidAction = true;
+                goNextFloor();
+                return;
+            }
+            if (campForgeRect.contains(mouse)) {
+                if (campfireDidAction) {
+                    pushLog("本层营火已使用");
+                    return;
+                }
+                campfireDidAction = true;
+                beginDeckEdit(DeckEditMode::UpgradeOne, Phase::Campfire, true);
+                return;
+            }
+        } else if (phase == Phase::Shop) {
+            if (shopLeaveRect.contains(mouse)) {
+                goNextFloor();
+                return;
+            }
+            if (shopPotionRect.contains(mouse)) {
+                tryBuyPotionCapacity();
+                return;
+            }
+            if (shopRemoveRect.contains(mouse)) {
+                tryBuyRemoveService();
+                return;
+            }
+
+            auto rects = shopCardRects();
+            for (size_t i = 0; i < rects.size() && i < shopChoices.size(); ++i) {
+                if (rects[i].contains(mouse)) {
+                    tryBuyShopCard(static_cast<int>(i));
+                    return;
+                }
+            }
+        } else if (phase == Phase::Event) {
+            if (eventLeftRect.contains(mouse)) {
+                resolveEventChoice(0);
+                return;
+            }
+            if (eventRightRect.contains(mouse)) {
+                resolveEventChoice(1);
+                return;
+            }
+        } else if (phase == Phase::DeckEdit) {
+            if (deckDoneRect.contains(mouse)) {
+                if (deckEditRemaining > 0) {
+                    pushLog("还需要选择 " + std::to_string(deckEditRemaining) + " 张卡牌");
+                } else {
+                    transitionTo(deckEditReturnPhase, "手动结束卡组编辑");
+                    if (deckEditAdvanceAfterDone) {
+                        goNextFloor();
+                    }
+                    deckEditMode = DeckEditMode::None;
+                    deckEditAdvanceAfterDone = false;
+                }
+                return;
+            }
+
+            auto rects = deckEditRects();
+            for (size_t i = 0; i < rects.size(); ++i) {
+                if (!rects[i].contains(mouse)) {
+                    continue;
+                }
+
+                bool changed = false;
+                if (deckEditMode == DeckEditMode::UpgradeOne) {
+                    changed = tryUpgradeDeckCard(static_cast<int>(i));
+                } else if (deckEditMode == DeckEditMode::RemoveOne || deckEditMode == DeckEditMode::RemoveTwo) {
+                    changed = removeDeckCardAt(static_cast<int>(i));
+                }
+
+                if (changed) {
+                    deckEditRemaining = std::max(0, deckEditRemaining - 1);
+                    finishDeckEditIfDone();
+                }
+                return;
             }
         } else if (phase == Phase::VictoryThanks) {
             transitionTo(Phase::Credits, "点击跳过感谢页");
@@ -1148,13 +1682,13 @@ private:
     }
 
     const sf::Texture* enemyPortrait() const {
-        if (battleIndex < 0 || battleIndex >= static_cast<int>(enemySequence.size())) {
+        if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             return &enemy1Tex;
         }
-        if (battleIndex == 0) return &enemy1Tex;
-        if (battleIndex == 1) return &enemy2Tex;
-        if (battleIndex == 2) return &enemy3Tex;
-        if (battleIndex == 3) return &eliteTex;
+        if (currentEnemyIndex <= 0) return &enemy1Tex;
+        if (currentEnemyIndex <= 1) return &enemy2Tex;
+        if (currentEnemyIndex <= 3) return &enemy3Tex;
+        if (currentEnemyIndex <= 6) return &eliteTex;
         return &bossTex;
     }
 
@@ -1183,24 +1717,24 @@ private:
         topBar.setFillColor(sf::Color(24, 30, 42, 235));
         window.draw(topBar);
 
-        if (battleIndex < 0 || battleIndex >= static_cast<int>(enemySequence.size())) {
+        if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             drawText("敌人数据异常", 20.f, 78.f, 22, sf::Color(255, 120, 120));
             return;
         }
-        const EnemyDef& def = enemySequence[battleIndex];
+        const EnemyDef& def = enemySequence[currentEnemyIndex];
 
         drawTextureFit(logoTex, sf::FloatRect(18.f, 16.f, 34.f, 34.f));
         drawText("迷你尖塔：铁甲战士", 60.f, 12.f, 28, sf::Color::White);
-        drawText("第 " + std::to_string(battleIndex + 1) + " / 5 场战斗", 20.f, 48.f, 22, sf::Color(220, 220, 220));
+        drawText("第 " + std::to_string(currentFloor + 1) + " / " + std::to_string(floorPlan.size()) + " 层", 20.f, 48.f, 22, sf::Color(220, 220, 220));
         drawText(def.name, 20.f, 78.f, 22, sf::Color(255, 220, 160));
 
-        std::ostringstream p;
-        p << "玩家生命 " << player.hp << "/" << player.maxHp << "  格挡 " << player.block << "  力量 " << player.strength
-          << "  虚弱 " << player.weak << "  易伤 " << player.vulnerable << "  能量 " << playerEnergy;
-        drawText(p.str(), 20.f, 114.f, 20, sf::Color(200, 235, 200));
+                std::ostringstream p;
+                p << "玩家生命 " << player.hp << "/" << player.maxHp << "  格挡 " << player.block << "  力量 " << player.strength
+                    << "  虚弱 " << player.weak << "  易伤 " << player.vulnerable << "  能量 " << playerEnergy;
+                drawText(p.str(), 20.f, 606.f, 20, sf::Color(200, 235, 200));
 
-        drawText("牌组规模 " + std::to_string(masterDeck.size()) + "  |  累计通关 " + std::to_string(totalWins),
-                 20.f, 640.f, 20, sf::Color(220, 220, 180));
+                drawText("牌组规模 " + std::to_string(masterDeck.size()) + "  |  金币 " + std::to_string(gold) + "  |  累计通关 " + std::to_string(totalWins),
+                                 20.f, 636.f, 20, sf::Color(220, 220, 180));
 
         std::ostringstream e;
         e << "敌人生命 " << enemy.hp << "/" << enemy.maxHp << "  格挡 " << enemy.block << "  力量 " << enemy.strength << "  虚弱 "
@@ -1208,8 +1742,14 @@ private:
         drawText(e.str(), 20.f, 140.f, 20, sf::Color(235, 200, 200));
 
         const Intent& intent = currentEnemyIntent();
-        drawTextureFit(intentTex, sf::FloatRect(720.f, 78.f, 30.f, 30.f));
-        drawText("意图：" + intent.label, 760.f, 78.f, 24, sf::Color(255, 235, 150));
+        sf::RectangleShape intentBox(sf::Vector2f(470.f, 62.f));
+        intentBox.setPosition(700.f, 66.f);
+        intentBox.setFillColor(sf::Color(48, 40, 22, 230));
+        intentBox.setOutlineThickness(2.f);
+        intentBox.setOutlineColor(sf::Color(255, 210, 110, 230));
+        window.draw(intentBox);
+        drawTextureFit(intentTex, sf::FloatRect(712.f, 77.f, 44.f, 44.f));
+        drawText("敌人意图：" + intent.label, 768.f, 82.f, 26, sf::Color(255, 235, 150));
 
         if (playerHitFlashTimer > 0.0f) {
             const float ratio = std::min(1.0f, playerHitFlashTimer / 0.22f);
@@ -1219,7 +1759,7 @@ private:
             window.draw(flash);
         }
 
-        drawText("药剂 " + std::to_string(potionCount) + "/4", potionRect.left + 14.f, potionRect.top + 10.f, 20, sf::Color(245, 235, 180));
+        drawText("药剂 " + std::to_string(potionCount) + "/" + std::to_string(potionMax), potionRect.left + 14.f, potionRect.top + 10.f, 20, sf::Color(245, 235, 180));
         drawText("点击：+10格挡 抽1", potionRect.left + 14.f, potionRect.top + 38.f, 16, sf::Color(220, 220, 220));
     }
 
@@ -1324,11 +1864,11 @@ private:
         }
 
         float logY = 185.f;
-        drawText("战斗日志", 930.f, logY, 22, sf::Color(220, 220, 220));
+        drawText("战斗日志", 20.f, logY, 20, sf::Color(220, 220, 220));
         logY += 28.f;
         for (const auto& line : logs) {
-            drawWrappedText(line, 930.f, logY, 14, sf::Color(215, 215, 215), 20);
-            logY += 18.f;
+            drawWrappedText(line, 20.f, logY, 12, sf::Color(215, 215, 215), 26);
+            logY += 16.f;
         }
 
         for (const auto& item : floatingTexts) {
@@ -1344,7 +1884,7 @@ private:
 
     void renderReward() {
         drawText("选择 1 张奖励卡牌", 450.f, 80.f, 40, sf::Color(255, 255, 210));
-        drawText("第 " + std::to_string(battleIndex + 1) + " 场战斗已完成", 500.f, 130.f, 24, sf::Color(220, 220, 220));
+        drawText("第 " + std::to_string(currentFloor + 1) + " 层战斗已完成", 500.f, 130.f, 24, sf::Color(220, 220, 220));
 
         auto rects = rewardRects();
         for (size_t i = 0; i < rewardChoices.size() && i < rects.size(); ++i) {
@@ -1369,10 +1909,97 @@ private:
         drawText("点击任意一张卡牌继续", 500.f, 640.f, 24, sf::Color(230, 230, 230));
     }
 
+    void renderCampfire() {
+        drawText("营火", 590.f, 100.f, 62, sf::Color(255, 226, 160));
+        drawText("你可以在这里休整或锻造卡牌", 420.f, 190.f, 28, sf::Color(230, 230, 230));
+        drawButton(campRestRect, "休息（回复30生命）", sf::Color(76, 126, 88, 235));
+        drawButton(campForgeRect, "锻造（升级1张卡）", sf::Color(126, 96, 66, 235));
+    }
+
+    void renderShop() {
+        drawText("商店", 590.f, 70.f, 58, sf::Color(255, 232, 176));
+        drawText("金币：" + std::to_string(gold), 80.f, 120.f, 30, sf::Color(245, 232, 180));
+
+        auto rects = shopCardRects();
+        for (size_t i = 0; i < rects.size() && i < shopChoices.size(); ++i) {
+            sf::RectangleShape box(sf::Vector2f(rects[i].width, rects[i].height));
+            box.setPosition(rects[i].left, rects[i].top);
+            box.setFillColor(sf::Color(36, 46, 66, 220));
+            box.setOutlineThickness(2.f);
+            box.setOutlineColor(sf::Color(0, 0, 0, 180));
+            window.draw(box);
+
+            if (shopChoices[i] <= 0) {
+                drawText("已售出", rects[i].left + 58.f, rects[i].top + 58.f, 24, sf::Color(170, 170, 170));
+                continue;
+            }
+
+            const CardDef* c = findCard(shopChoices[i]);
+            if (!c) {
+                continue;
+            }
+
+            drawText(c->name, rects[i].left + 10.f, rects[i].top + 8.f, 22, sf::Color::White);
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 40.f, 18, sf::Color(235, 235, 235));
+            drawText("价格 " + std::to_string(cardPrice(c->id)), rects[i].left + 10.f, rects[i].top + 66.f, 18, sf::Color(255, 220, 150));
+            drawWrappedText(c->desc, rects[i].left + 10.f, rects[i].top + 94.f, 14, sf::Color(220, 220, 220), 11);
+        }
+
+        drawButton(shopLeaveRect, "离开商店（下一层）", sf::Color(72, 98, 126, 240));
+        drawButton(shopPotionRect, "提升药剂上限（" + std::to_string(potionCapacityPrice) + "金币）", sf::Color(92, 76, 136, 240));
+        drawButton(shopRemoveRect, "移除1张卡（" + std::to_string(deckRemovePrice) + "金币）", sf::Color(138, 82, 72, 240));
+    }
+
+    void renderEvent() {
+        if (currentEventId == 1) {
+            drawText("事件：生锈刀刃", 450.f, 80.f, 54, sf::Color(250, 210, 170));
+            drawWrappedText("你在前方看见了一座荒废神殿。祭坛上有一把生锈匕首，似乎在渴望鲜血。", 170.f, 180.f, 28, sf::Color(235, 235, 235), 28);
+            drawButton(eventLeftRect, "失去10生命，获得 邪恶之刃", sf::Color(130, 72, 72, 240));
+            drawButton(eventRightRect, "无视匕首，拿走100金币", sf::Color(92, 118, 72, 240));
+            return;
+        }
+
+        drawText("事件：救与不救", 470.f, 80.f, 54, sf::Color(250, 210, 170));
+        drawWrappedText("一位看上去需要帮助的老人挡在路中央。你该如何选择？", 220.f, 190.f, 30, sf::Color(235, 235, 235), 24);
+        drawButton(eventLeftRect, "施以援手，损失12生命", sf::Color(130, 72, 72, 240));
+        drawButton(eventRightRect, "绕路找到剪刀，移除2张卡", sf::Color(92, 118, 72, 240));
+    }
+
+    void renderDeckEdit() {
+        drawText("卡组操作", 540.f, 40.f, 52, sf::Color(246, 232, 188));
+        if (deckEditMode == DeckEditMode::UpgradeOne) {
+            drawText("选择1张卡进行升级", 490.f, 98.f, 28, sf::Color(230, 230, 230));
+        } else if (deckEditMode == DeckEditMode::RemoveTwo) {
+            drawText("选择2张卡移除，剩余：" + std::to_string(deckEditRemaining), 430.f, 98.f, 28, sf::Color(230, 230, 230));
+        } else {
+            drawText("选择1张卡移除", 520.f, 98.f, 28, sf::Color(230, 230, 230));
+        }
+
+        auto rects = deckEditRects();
+        for (size_t i = 0; i < rects.size(); ++i) {
+            sf::RectangleShape card(sf::Vector2f(rects[i].width, rects[i].height));
+            card.setPosition(rects[i].left, rects[i].top);
+            const CardDef* c = findCard(masterDeck[i]);
+            card.setFillColor(c ? cardColor(c->type) : sf::Color(90, 90, 90));
+            card.setOutlineThickness(2.f);
+            card.setOutlineColor(sf::Color(0, 0, 0, 190));
+            window.draw(card);
+
+            if (!c) {
+                continue;
+            }
+            drawText(c->name, rects[i].left + 6.f, rects[i].top + 6.f, 18, sf::Color::White);
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 32.f, 14, sf::Color(230, 230, 230));
+            drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 50.f, 12, sf::Color(230, 230, 230), 16);
+        }
+
+        drawButton(deckDoneRect, "完成", sf::Color(76, 110, 140, 240));
+    }
+
     void renderMainMenu() {
         drawTextureFit(logoTex, sf::FloatRect(550.f, 90.f, 180.f, 180.f));
         drawText("迷你尖塔 Demo", 480.f, 70.f, 52, sf::Color(255, 245, 230));
-        drawText("铁甲战士的五场试炼", 500.f, 255.f, 30, sf::Color(230, 230, 210));
+        drawText("铁甲战士的十五层试炼", 500.f, 255.f, 30, sf::Color(230, 230, 210));
 
         drawButton(menuStartRect, "开始游戏", sf::Color(58, 135, 86, 235));
         drawButton(menuExitRect, "退出游戏", sf::Color(146, 72, 72, 235));
@@ -1436,6 +2063,14 @@ private:
             renderBattle();
         } else if (phase == Phase::Reward) {
             renderReward();
+        } else if (phase == Phase::Campfire) {
+            renderCampfire();
+        } else if (phase == Phase::Shop) {
+            renderShop();
+        } else if (phase == Phase::Event) {
+            renderEvent();
+        } else if (phase == Phase::DeckEdit) {
+            renderDeckEdit();
         } else if (phase == Phase::VictoryThanks) {
             renderVictoryThanks();
         } else if (phase == Phase::Credits) {
@@ -1448,7 +2083,11 @@ private:
     }
 };
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc > 1 && std::string(argv[1]) == "--self-test") {
+        return Game::runSelfTest(std::cout) ? 0 : 2;
+    }
+
     try {
         Game game;
         game.run();

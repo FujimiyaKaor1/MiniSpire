@@ -6,14 +6,15 @@
 
 Implemented scope:
 - 1 名可玩角色（铁甲战士风格）
-- 20 张战士卡牌
-- 3 种普通敌人
-- 1 种精英敌人
+- 36 张战士卡牌（含 16 张新增卡与全卡升级版本）
+- 4 种普通敌人
+- 3 种精英敌人
 - 1 个 BOSS
-- 固定 5 场战斗（3 普通 + 1 精英 + 1 BOSS）
+- 固定 15 层爬塔流程（战斗/营火/商店/事件）
 - 击败 BOSS 后进入“感谢游玩”与“制作人名单（占位）”界面，再回到主菜单
 - 主菜单包含“开始游戏 / 退出游戏”
-- 药剂系统：初始 1 瓶，战斗胜利后 +1（上限 4），战斗中可点击使用（+10 格挡并抽 1）
+- 金币系统：初始 99 金币，可在商店购买卡牌、提升药剂上限、移除卡牌
+- 药剂系统：初始 1 瓶，战斗胜利后 +1（受上限约束），战斗中可点击使用（+10 格挡并抽 1）
 - 轻量动画：受击闪白、状态栏受击红闪、手牌悬停上浮、出牌短过渡动画、回合提示淡出、战斗浮动文字反馈
 
 ## Build (Windows + vcpkg recommended)
@@ -28,6 +29,8 @@ Implemented scope:
    - `cmake --build --preset default`
 4. Run:
    - `./build/MiniSpireSFML.exe`
+5. Smoke self-test:
+   - `ctest --preset default --output-on-failure`
 
 ## Controls
 
@@ -36,6 +39,9 @@ Implemented scope:
 - 点击“结束回合”：进入敌方行动
 - 点击药剂按钮：消耗 1 瓶药剂（+10 格挡并抽 1 张牌）
 - 奖励界面点击三选一卡：加入本局牌组
+- 营火界面：可选择“休息（回复 30 生命）”或“锻造（升级 1 张卡）”
+- 商店界面：可购买随机卡牌、提升药剂上限、购买移除服务
+- 事件界面：按事件文本选择左右选项执行分支结果
 - 按 `R`：在战斗/奖励/失败阶段重开本局
 - 按 `T`：开关战斗动画（便于低性能设备）
 
@@ -50,6 +56,8 @@ Implemented scope:
 - Demo 视觉使用联网获取的开源素材（OpenMoji 图标 + Noto CJK 字体）。
 - If packaged fonts fail to load, the game tries `C:/Windows/Fonts/arial.ttf`.
 - 本局内牌组会成长：奖励卡会进入主牌组并用于后续战斗。
+- 营火锻造会将卡牌升级为 `卡名+`，升级后优先提升数值，部分高费卡会降费。
+- 战斗日志已缩小字号并移动到左上侧，玩家属性条移动到左下，敌人意图增加高亮框。
 - 战斗临时状态会在每场战斗开始时重置。
 - 保存文件 `save_progress.dat` 会记录累计通关次数。
 - SFML is fetched and built from source by CMake to avoid local binary ABI mismatches.
@@ -73,8 +81,8 @@ Implemented scope:
 ## Known Limitations
 
 - 当前项目仍为单文件核心逻辑，后续会继续模块化拆分。
-- 暂未引入自动化测试框架，主要依赖构建与手工回归。
-- 暂未实现完整地图分支、商店、事件和遗物系统。
+- 当前仅提供最小化自动回归（`smoke_self_test`），覆盖配置解析与阶段跳转合法性。
+- 目前地图是固定 15 层脚本，尚未实现分支路线与随机房间池。
 
 ## Asset Attribution
 
