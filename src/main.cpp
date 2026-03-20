@@ -1,6 +1,7 @@
 ﻿#include <SFML/Graphics.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <cstdint>
@@ -62,12 +63,48 @@ struct Combatant {
     int vulnerable = 0;
 };
 
+struct FloatingText {
+    sf::String text;
+    sf::Vector2f position;
+    sf::Vector2f velocity;
+    sf::Color color;
+    float remaining = 0.0f;
+    float duration = 0.0f;
+};
+
+struct PendingCardPlay {
+    bool active = false;
+    int handIndex = -1;
+    int cardId = -1;
+    float elapsed = 0.0f;
+    float duration = 0.16f;
+    sf::FloatRect fromRect;
+    sf::Vector2f target;
+};
+
+struct PendingEnemyTurn {
+    bool active = false;
+    bool resolved = false;
+    float elapsed = 0.0f;
+    float windup = 0.22f;
+    float recover = 0.12f;
+};
+
+struct AppConfig {
+    unsigned int maxFps = 60;
+    bool enableAnimations = true;
+    bool enableFloatingText = true;
+    float textScale = 1.0f;
+};
+
 class Game {
 public:
     Game()
         : window(sf::VideoMode(1280, 720), "迷你尖塔 Demo"),
           rng(static_cast<std::mt19937::result_type>(std::random_device{}())) {
-        window.setFramerateLimit(60);
+                loadConfig();
+                enableCombatAnimations = config.enableAnimations;
+                window.setFramerateLimit(config.maxFps);
         loadFont();
         loadTextures();
         initCards();
@@ -138,6 +175,10 @@ private:
 
     std::vector<int> rewardChoices;
     std::deque<std::string> logs;
+    std::vector<FloatingText> floatingTexts;
+    PendingCardPlay pendingCard;
+    PendingEnemyTurn pendingEnemy;
+    AppConfig config;
 
     sf::FloatRect endTurnRect{1070.f, 620.f, 170.f, 70.f};
     sf::FloatRect potionRect{1040.f, 530.f, 200.f, 72.f};
@@ -149,16 +190,136 @@ private:
     float playerHitFlashTimer = 0.0f;
     float turnBannerTimer = 0.0f;
     int hoveredCardIndex = -1;
+    bool enableCombatAnimations = true;
 
     static constexpr const char* kSavePath = "save_progress.dat";
+    static constexpr const char* kConfigPath = "game_config.ini";
+
+    static std::string trim(const std::string& s) {
+        std::size_t start = 0;
+        while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start])) != 0) {
+            ++start;
+        }
+        std::size_t end = s.size();
+        while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1])) != 0) {
+            --end;
+        }
+        return s.substr(start, end - start);
+    }
+
+    static bool parseBool(const std::string& value) {
+        std::string lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return lowered == "1" || lowered == "true" || lowered == "yes" || lowered == "on";
+    }
+
+    void writeDefaultConfig() const {
+        std::ofstream out(kConfigPath, std::ios::trunc);
+        if (!out) {
+            return;
+        }
+        out << "# MiniSpireSFML runtime config\n";
+        out << "max_fps=60\n";
+        out << "enable_animations=true\n";
+        out << "enable_floating_text=true\n";
+        out << "text_scale=1.0\n";
+    }
+
+    void loadConfig() {
+        std::ifstream in(kConfigPath);
+        if (!in) {
+            writeDefaultConfig();
+            return;
+        }
+
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::string raw = trim(line);
+            if (raw.empty() || raw[0] == '#') {
+                continue;
+            }
+
+            const std::size_t pos = raw.find('=');
+            if (pos == std::string::npos) {
+                continue;
+            }
+
+            const std::string key = trim(raw.substr(0, pos));
+            const std::string value = trim(raw.substr(pos + 1));
+
+            try {
+                if (key == "max_fps") {
+                    const int parsed = std::stoi(value);
+                    config.maxFps = static_cast<unsigned int>(std::clamp(parsed, 30, 240));
+                } else if (key == "enable_animations") {
+                    config.enableAnimations = parseBool(value);
+                } else if (key == "enable_floating_text") {
+                    config.enableFloatingText = parseBool(value);
+                } else if (key == "text_scale") {
+                    const float parsed = std::stof(value);
+                    config.textScale = std::clamp(parsed, 0.8f, 1.5f);
+                }
+            } catch (...) {
+                std::cerr << "[warn] 配置项解析失败: " << key << "=" << value << '\n';
+            }
+        }
+    }
+
+    bool isValidTransition(Phase from, Phase to) const {
+        if (from == to) {
+            return true;
+        }
+        switch (from) {
+            case Phase::MainMenu: return to == Phase::Battle;
+            case Phase::Battle: return to == Phase::Reward || to == Phase::Defeat || to == Phase::VictoryThanks || to == Phase::MainMenu;
+            case Phase::Reward: return to == Phase::Battle || to == Phase::MainMenu;
+            case Phase::VictoryThanks: return to == Phase::Credits;
+            case Phase::Credits: return to == Phase::MainMenu;
+            case Phase::Defeat: return to == Phase::MainMenu || to == Phase::Battle;
+            default: return false;
+        }
+    }
+
+    void transitionTo(Phase to, const std::string& reason) {
+        if (!isValidTransition(phase, to)) {
+            std::cerr << "[warn] 非法阶段跳转: " << static_cast<int>(phase) << " -> " << static_cast<int>(to)
+                      << " 原因: " << reason << '\n';
+            return;
+        }
+        phase = to;
+    }
 
     void loadFont() {
         hasFont = font.loadFromFile("assets/fonts/NotoSansCJKsc-Regular.otf") ||
                   font.loadFromFile("assets/font.ttf") ||
                   font.loadFromFile("C:/Windows/Fonts/arial.ttf");
+        if (!hasFont) {
+            std::cerr << "[warn] 字体加载失败，文本将无法显示" << '\n';
+        }
     }
 
-    void loadTexture(sf::Texture& tex, const std::string& path) { tex.loadFromFile(path); }
+    void loadTexture(sf::Texture& tex, const std::string& path) {
+        if (!tex.loadFromFile(path)) {
+            std::cerr << "[warn] 纹理加载失败: " << path << '\n';
+        }
+    }
+
+    void spawnFloatingText(const std::string& text, const sf::Vector2f& anchor, const sf::Color& color, float duration = 0.75f) {
+        if (!config.enableFloatingText) {
+            return;
+        }
+        std::uniform_real_distribution<float> xJitter(-18.f, 18.f);
+        FloatingText item;
+        item.text = sf::String::fromUtf8(text.begin(), text.end());
+        item.position = sf::Vector2f(anchor.x + xJitter(rng), anchor.y);
+        item.velocity = sf::Vector2f(0.f, -48.f);
+        item.color = color;
+        item.remaining = duration;
+        item.duration = duration;
+        floatingTexts.push_back(item);
+    }
 
     void loadTextures() {
         loadTexture(cardAttackTex, "assets/images/cards/attack.png");
@@ -218,11 +379,11 @@ private:
         enemySequence.clear();
 
         enemySequence.push_back({
-            "普通敌人：黏液斗士", 38, false, false,
-            {{"攻击 7", 7, 1, 0, 0, 0, 0}, {"格挡 6 + 攻击 5", 5, 1, 6, 0, 0, 0}, {"攻击 9", 9, 1, 0, 0, 0, 0}}});
+            "普通敌人：黏液斗士", 35, false, false,
+            {{"攻击 7", 7, 1, 0, 0, 0, 0}, {"格挡 6 + 攻击 5", 5, 1, 6, 0, 0, 0}, {"攻击 7", 7, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "普通敌人：邪教徒", 44, false, false,
+            "普通敌人：邪教徒", 48, false, false,
             {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 6 x2", 6, 2, 0, 0, 0, 0}, {"攻击 10", 10, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
@@ -298,12 +459,18 @@ private:
         rewardChoices.clear();
         logs.clear();
         masterDeck.clear();
+        floatingTexts.clear();
+        pendingCard.active = false;
+        pendingEnemy.active = false;
 
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 4; ++i) {
             masterDeck.push_back(1);
         }
-        for (int i = 0; i < 4; ++i) {
+        for (int i = 0; i < 3; ++i) {
             masterDeck.push_back(2);
+        }
+        for (int i = 0; i < 2; ++i) {
+            masterDeck.push_back(5);
         }
         masterDeck.push_back(3);
 
@@ -311,6 +478,43 @@ private:
         phase = Phase::Battle;
         phaseTimer = 0.0f;
         startBattle();
+    }
+
+    void beginCardPlay(int handIndex) {
+        if (pendingCard.active || pendingEnemy.active || handIndex < 0 || handIndex >= static_cast<int>(hand.size())) {
+            return;
+        }
+        if (!enableCombatAnimations) {
+            applyCard(handIndex);
+            return;
+        }
+        auto rects = handRects();
+        if (handIndex >= static_cast<int>(rects.size())) {
+            return;
+        }
+        pendingCard.active = true;
+        pendingCard.handIndex = handIndex;
+        pendingCard.cardId = hand[handIndex];
+        pendingCard.elapsed = 0.0f;
+        pendingCard.duration = 0.16f;
+        pendingCard.fromRect = rects[handIndex];
+        pendingCard.target = sf::Vector2f(620.f, 300.f);
+    }
+
+    void beginEnemyTurn() {
+        if (phase != Phase::Battle || pendingEnemy.active || pendingCard.active) {
+            return;
+        }
+        if (!enableCombatAnimations) {
+            executeEnemyTurn(true);
+            return;
+        }
+        pendingEnemy.active = true;
+        pendingEnemy.resolved = false;
+        pendingEnemy.elapsed = 0.0f;
+        pendingEnemy.windup = 0.22f;
+        pendingEnemy.recover = 0.12f;
+        spawnFloatingText("敌人行动", sf::Vector2f(620.f, 186.f), sf::Color(255, 210, 120), 0.5f);
     }
 
     void shuffle(std::vector<int>& pile) { std::shuffle(pile.begin(), pile.end(), rng); }
@@ -344,6 +548,8 @@ private:
         hand.clear();
         discardPile.clear();
         exhaustPile.clear();
+        pendingCard.active = false;
+        pendingEnemy.active = false;
 
         player.block = 0;
         player.strength = 0;
@@ -398,8 +604,10 @@ private:
 
         if (targetIsPlayer) {
             playerHitFlashTimer = 0.22f;
+            spawnFloatingText("-" + std::to_string(damage), sf::Vector2f(275.f, 122.f), sf::Color(255, 120, 120), 0.65f);
         } else {
             enemyHitFlashTimer = 0.22f;
+            spawnFloatingText("-" + std::to_string(damage), sf::Vector2f(620.f, 238.f), sf::Color(255, 210, 120), 0.65f);
         }
     }
 
@@ -446,21 +654,25 @@ private:
         if (c->block > 0) {
             player.block += c->block;
             pushLog(c->name + " 提供 " + std::to_string(c->block) + " 点格挡");
+            spawnFloatingText("+" + std::to_string(c->block) + " 格挡", sf::Vector2f(260.f, 142.f), sf::Color(120, 210, 255), 0.8f);
         }
 
         if (c->gainStrength > 0) {
             player.strength += c->gainStrength;
             pushLog(c->name + " 提供 " + std::to_string(c->gainStrength) + " 点力量");
+            spawnFloatingText("+" + std::to_string(c->gainStrength) + " 力量", sf::Vector2f(290.f, 108.f), sf::Color(255, 200, 100), 0.8f);
         }
 
         if (c->applyVulnerable > 0 && enemy.hp > 0) {
             enemy.vulnerable += c->applyVulnerable;
             pushLog("敌人获得 " + std::to_string(c->applyVulnerable) + " 层易伤");
+            spawnFloatingText("易伤 +" + std::to_string(c->applyVulnerable), sf::Vector2f(640.f, 208.f), sf::Color(255, 170, 90), 0.9f);
         }
 
         if (c->applyWeak > 0 && enemy.hp > 0) {
             enemy.weak += c->applyWeak;
             pushLog("敌人获得 " + std::to_string(c->applyWeak) + " 层虚弱");
+            spawnFloatingText("虚弱 +" + std::to_string(c->applyWeak), sf::Vector2f(640.f, 238.f), sf::Color(180, 150, 255), 0.9f);
         }
 
         if (c->gainEnergy > 0) {
@@ -486,7 +698,7 @@ private:
         }
 
         if (player.hp <= 0) {
-            phase = Phase::Defeat;
+            transitionTo(Phase::Defeat, "玩家因卡牌副作用死亡");
             return;
         }
 
@@ -497,12 +709,12 @@ private:
 
     void onBattleWon() {
         pushLog("战斗胜利");
-        potionCount = std::min(3, potionCount + 1);
+        potionCount = std::min(4, potionCount + 1);
         pushLog("获得 1 瓶药剂（当前 " + std::to_string(potionCount) + "）");
         if (battleIndex == static_cast<int>(enemySequence.size()) - 1) {
             totalWins++;
             saveProgress();
-            phase = Phase::VictoryThanks;
+            transitionTo(Phase::VictoryThanks, "击败最终BOSS");
             phaseTimer = 0.0f;
             return;
         }
@@ -518,7 +730,33 @@ private:
                 rewardChoices.push_back(id);
             }
         }
-        phase = Phase::Reward;
+
+        bool hasLowCost = false;
+        for (int id : rewardChoices) {
+            const CardDef* reward = findCard(id);
+            if (reward && reward->cost <= 1) {
+                hasLowCost = true;
+                break;
+            }
+        }
+
+        if (!hasLowCost) {
+            std::vector<int> lowCostCandidates;
+            for (const auto& c : cardPool) {
+                if (c.id == 1 || c.id == 2 || c.cost > 1) {
+                    continue;
+                }
+                if (std::find(rewardChoices.begin(), rewardChoices.end(), c.id) == rewardChoices.end()) {
+                    lowCostCandidates.push_back(c.id);
+                }
+            }
+            if (!lowCostCandidates.empty()) {
+                std::uniform_int_distribution<int> slotDist(0, static_cast<int>(rewardChoices.size()) - 1);
+                std::uniform_int_distribution<int> cardDist(0, static_cast<int>(lowCostCandidates.size()) - 1);
+                rewardChoices[slotDist(rng)] = lowCostCandidates[cardDist(rng)];
+            }
+        }
+        transitionTo(Phase::Reward, "普通战斗胜利后进入奖励");
     }
 
     void endPlayerTurn() {
@@ -534,10 +772,10 @@ private:
             --player.vulnerable;
         }
 
-        executeEnemyTurn();
+        beginEnemyTurn();
     }
 
-    void executeEnemyTurn() {
+    void executeEnemyTurn(bool startNextPlayerTurn) {
         if (phase != Phase::Battle) {
             return;
         }
@@ -547,7 +785,9 @@ private:
         const EnemyDef& def = enemySequence[battleIndex];
         if (def.pattern.empty()) {
             pushLog("敌人行为模式为空，跳过敌方回合");
-            startPlayerTurn();
+            if (startNextPlayerTurn) {
+                startPlayerTurn();
+            }
             return;
         }
 
@@ -562,16 +802,19 @@ private:
         if (intent.gainStrength > 0) {
             enemy.strength += intent.gainStrength;
             pushLog("敌人获得 " + std::to_string(intent.gainStrength) + " 点力量");
+            spawnFloatingText("敌人力量 +" + std::to_string(intent.gainStrength), sf::Vector2f(620.f, 208.f), sf::Color(255, 180, 110), 0.9f);
         }
 
         if (intent.applyWeak > 0) {
             player.weak += intent.applyWeak;
             pushLog("你获得 " + std::to_string(intent.applyWeak) + " 层虚弱");
+            spawnFloatingText("虚弱 +" + std::to_string(intent.applyWeak), sf::Vector2f(272.f, 154.f), sf::Color(180, 150, 255), 0.9f);
         }
 
         if (intent.applyVulnerable > 0) {
             player.vulnerable += intent.applyVulnerable;
             pushLog("你获得 " + std::to_string(intent.applyVulnerable) + " 层易伤");
+            spawnFloatingText("易伤 +" + std::to_string(intent.applyVulnerable), sf::Vector2f(272.f, 182.f), sf::Color(255, 170, 90), 0.9f);
         }
 
         if (intent.damage > 0) {
@@ -593,11 +836,13 @@ private:
         }
 
         if (player.hp <= 0) {
-            phase = Phase::Defeat;
+            transitionTo(Phase::Defeat, "敌方回合造成玩家死亡");
             return;
         }
 
-        startPlayerTurn();
+        if (startNextPlayerTurn) {
+            startPlayerTurn();
+        }
     }
 
     std::vector<sf::FloatRect> handRects() const {
@@ -655,7 +900,7 @@ private:
         }
 
         battleIndex++;
-        phase = Phase::Battle;
+        transitionTo(Phase::Battle, "奖励选牌后进入下一战");
         startBattle();
     }
 
@@ -663,6 +908,29 @@ private:
         if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
             if (phase == Phase::Battle || phase == Phase::Reward || phase == Phase::Defeat) {
                 resetRun();
+            }
+            return;
+        }
+
+        if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::T) {
+            enableCombatAnimations = !enableCombatAnimations;
+            pushLog(std::string("动画效果：") + (enableCombatAnimations ? "开启" : "关闭"));
+            if (!enableCombatAnimations) {
+                if (pendingCard.active) {
+                    const int toResolve = pendingCard.handIndex;
+                    pendingCard.active = false;
+                    applyCard(toResolve);
+                }
+                if (pendingEnemy.active) {
+                    if (!pendingEnemy.resolved) {
+                        pendingEnemy.resolved = true;
+                        executeEnemyTurn(false);
+                    }
+                    pendingEnemy.active = false;
+                    if (phase == Phase::Battle && player.hp > 0) {
+                        startPlayerTurn();
+                    }
+                }
             }
             return;
         }
@@ -683,12 +951,17 @@ private:
                 return;
             }
         } else if (phase == Phase::Battle) {
+            if (pendingCard.active || pendingEnemy.active) {
+                return;
+            }
+
             if (potionRect.contains(mouse)) {
                 if (potionCount > 0) {
                     potionCount--;
                     player.block += 10;
                     drawCards(1);
                     pushLog("使用药剂：获得 10 点格挡并抽 1 张牌");
+                    spawnFloatingText("药剂：+10 格挡", sf::Vector2f(1080.f, 506.f), sf::Color(200, 180, 255), 0.9f);
                 } else {
                     pushLog("药剂已用完");
                 }
@@ -703,7 +976,7 @@ private:
             auto rects = handRects();
             for (size_t i = 0; i < rects.size(); ++i) {
                 if (rects[i].contains(mouse)) {
-                    applyCard(static_cast<int>(i));
+                    beginCardPlay(static_cast<int>(i));
                     return;
                 }
             }
@@ -716,11 +989,11 @@ private:
                 }
             }
         } else if (phase == Phase::VictoryThanks) {
-            phase = Phase::Credits;
+            transitionTo(Phase::Credits, "点击跳过感谢页");
             phaseTimer = 0.0f;
         } else if (phase == Phase::Credits || phase == Phase::Defeat) {
             if (backMenuRect.contains(mouse)) {
-                phase = Phase::MainMenu;
+                transitionTo(Phase::MainMenu, "结算页返回主菜单");
                 phaseTimer = 0.0f;
             }
         }
@@ -730,6 +1003,43 @@ private:
         enemyHitFlashTimer = std::max(0.0f, enemyHitFlashTimer - dt);
         playerHitFlashTimer = std::max(0.0f, playerHitFlashTimer - dt);
         turnBannerTimer = std::max(0.0f, turnBannerTimer - dt);
+
+        for (auto it = floatingTexts.begin(); it != floatingTexts.end();) {
+            it->remaining = std::max(0.0f, it->remaining - dt);
+            it->position += it->velocity * dt;
+            if (it->remaining <= 0.0f) {
+                it = floatingTexts.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
+        if (pendingCard.active) {
+            pendingCard.elapsed += dt;
+            if (pendingCard.elapsed >= pendingCard.duration) {
+                const int toResolve = pendingCard.handIndex;
+                pendingCard.active = false;
+                applyCard(toResolve);
+            }
+        }
+
+        if (pendingEnemy.active) {
+            pendingEnemy.elapsed += dt;
+
+            if (!pendingEnemy.resolved && pendingEnemy.elapsed >= pendingEnemy.windup) {
+                pendingEnemy.resolved = true;
+                pendingEnemy.elapsed = 0.0f;
+                executeEnemyTurn(false);
+                if (phase != Phase::Battle || player.hp <= 0) {
+                    pendingEnemy.active = false;
+                }
+            } else if (pendingEnemy.resolved && pendingEnemy.elapsed >= pendingEnemy.recover) {
+                pendingEnemy.active = false;
+                if (phase == Phase::Battle && player.hp > 0) {
+                    startPlayerTurn();
+                }
+            }
+        }
 
         hoveredCardIndex = -1;
         if (phase == Phase::Battle) {
@@ -747,13 +1057,13 @@ private:
         if (phase == Phase::VictoryThanks) {
             phaseTimer += dt;
             if (phaseTimer >= 3.0f) {
-                phase = Phase::Credits;
+                transitionTo(Phase::Credits, "感谢页自动过渡");
                 phaseTimer = 0.0f;
             }
         } else if (phase == Phase::Credits) {
             phaseTimer += dt;
             if (phaseTimer >= 8.0f) {
-                phase = Phase::MainMenu;
+                transitionTo(Phase::MainMenu, "制作人名单自动返回主菜单");
                 phaseTimer = 0.0f;
             }
         }
@@ -909,7 +1219,7 @@ private:
             window.draw(flash);
         }
 
-        drawText("药剂 " + std::to_string(potionCount) + "/3", potionRect.left + 14.f, potionRect.top + 10.f, 20, sf::Color(245, 235, 180));
+        drawText("药剂 " + std::to_string(potionCount) + "/4", potionRect.left + 14.f, potionRect.top + 10.f, 20, sf::Color(245, 235, 180));
         drawText("点击：+10格挡 抽1", potionRect.left + 14.f, potionRect.top + 38.f, 16, sf::Color(220, 220, 220));
     }
 
@@ -923,6 +1233,16 @@ private:
         enemyPanel.setOutlineColor(sf::Color(0, 0, 0, 170));
         window.draw(enemyPanel);
         drawTextureFit(*enemyPortrait(), sf::FloatRect(520.f, 205.f, 200.f, 200.f));
+
+        if (pendingEnemy.active && !pendingEnemy.resolved) {
+            sf::RectangleShape windup(sf::Vector2f(210.f, 38.f));
+            windup.setPosition(515.f, 176.f);
+            windup.setFillColor(sf::Color(150, 90, 40, 210));
+            windup.setOutlineThickness(2.f);
+            windup.setOutlineColor(sf::Color(0, 0, 0, 180));
+            window.draw(windup);
+            drawText("敌人蓄力中...", 542.f, 184.f, 20, sf::Color::White);
+        }
 
         if (enemyHitFlashTimer > 0.0f) {
             const float ratio = std::min(1.0f, enemyHitFlashTimer / 0.22f);
@@ -949,6 +1269,9 @@ private:
 
         auto rects = handRects();
         for (size_t i = 0; i < hand.size(); ++i) {
+            if (pendingCard.active && static_cast<int>(i) == pendingCard.handIndex) {
+                continue;
+            }
             const CardDef* c = findCard(hand[i]);
             if (!c) {
                 continue;
@@ -966,6 +1289,26 @@ private:
             drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 30.f - hoverLift, 14, sf::Color::White);
             drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 70.f, rects[i].top + 6.f - hoverLift, 34.f, 34.f));
             drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 56.f - hoverLift, 13, sf::Color(240, 240, 240), 8);
+        }
+
+        if (pendingCard.active) {
+            const CardDef* c = findCard(pendingCard.cardId);
+            if (c) {
+                const float t = std::min(1.0f, pendingCard.elapsed / pendingCard.duration);
+                const float x = pendingCard.fromRect.left + (pendingCard.target.x - pendingCard.fromRect.left) * t;
+                const float y = pendingCard.fromRect.top + (pendingCard.target.y - pendingCard.fromRect.top) * t;
+                const float scale = 1.0f - 0.25f * t;
+
+                sf::RectangleShape card(sf::Vector2f(pendingCard.fromRect.width * scale, pendingCard.fromRect.height * scale));
+                card.setPosition(x, y);
+                card.setFillColor(cardColor(c->type));
+                card.setOutlineThickness(2.f);
+                card.setOutlineColor(sf::Color::Black);
+                window.draw(card);
+
+                drawText(c->name, x + 6.f, y + 8.f, 16, sf::Color::White);
+                drawText("费 " + std::to_string(c->cost), x + 6.f, y + 30.f, 14, sf::Color::White);
+            }
         }
 
         if (turnBannerTimer > 0.0f) {
@@ -988,6 +1331,14 @@ private:
             logY += 18.f;
         }
 
+        for (const auto& item : floatingTexts) {
+            const float t = std::min(1.0f, item.remaining / item.duration);
+            sf::Color c = item.color;
+            c.a = static_cast<sf::Uint8>(70.f + t * 185.f);
+            drawSfText(item.text, item.position.x, item.position.y, 20, c);
+        }
+
+        drawText(std::string("T：动画") + (enableCombatAnimations ? "开" : "关"), 180.f, 680.f, 18, sf::Color(180, 180, 180));
         drawText("R：重新开始本局", 20.f, 680.f, 18, sf::Color(180, 180, 180));
     }
 
