@@ -1,0 +1,14 @@
+# Build outputs
+/build/
+
+# CMake intermediate files
+CMakeUserPresets.json
+
+# Runtime/local files
+save_progress.dat
+
+# VS Code workspace local cache
+.vscode/*.code-workspace
+
+# Temporary folders
+*.tmp
