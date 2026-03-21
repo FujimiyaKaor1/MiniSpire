@@ -18,11 +18,15 @@ Used files:
 - assets/images/ui/start.png <- color/618x618/25B6.png
 - assets/images/ui/exit.png <- color/618x618/274C.png
 - assets/images/ui/thanks.png <- color/618x618/1F64F.png
-- assets/images/enemies/enemy1.png <- color/618x618/1F41B.png
-- assets/images/enemies/enemy2.png <- color/618x618/1F9D9-200D-2642-FE0F.png
-- assets/images/enemies/enemy3.png <- color/618x618/1F577.png
-- assets/images/enemies/elite.png <- color/618x618/1F6E1.png
-- assets/images/enemies/boss.png <- color/618x618/1F409.png
+- assets/images/ui/stat_gold.png <- color/618x618/1FA99.png
+- assets/images/ui/stat_potion.png <- color/618x618/1F9EA.png
+- assets/images/ui/stat_deck.png <- color/618x618/1F4DA.png
+- assets/images/ui/stat_relic.png <- color/618x618/1F48E.png
+- assets/images/enemies/enemy1.png <- color/618x618/1F98A.png
+- assets/images/enemies/enemy2.png <- color/618x618/1F479.png
+- assets/images/enemies/enemy3.png <- color/618x618/1F40D.png
+- assets/images/enemies/elite.png <- color/618x618/1F43A.png
+- assets/images/enemies/boss.png <- color/618x618/1F47F.png
 
 ### Noto CJK (SIL Open Font License 1.1)
 - Source repository: https://github.com/notofonts/noto-cjk
@@ -36,3 +40,22 @@ Used files:
 - Keep this file updated if any assets are replaced.
 
 If external assets are added later, record exact file names, source URLs, and licenses in this file.
+
+### Optional Enemy Replacement Script Mapping
+- Script: scripts/download_enemy_assets_openmoji.ps1
+- Purpose: Replace enemy textures from OpenMoji raw source with traceable codepoints.
+- Mapping (codepoint -> destination file):
+- 1F98A -> assets/images/enemies/enemy1.png
+- 1F479 -> assets/images/enemies/enemy2.png
+- 1F40D -> assets/images/enemies/enemy3.png
+- 1F43A -> assets/images/enemies/elite.png
+- 1F47F -> assets/images/enemies/boss.png
+
+### Optional UI Emoji Script Mapping
+- Script: scripts/download_ui_emoji_openmoji.ps1
+- Purpose: Replace status panel emoji icons from OpenMoji raw source with traceable codepoints.
+- Mapping (codepoint -> destination file):
+- 1FA99 -> assets/images/ui/stat_gold.png
+- 1F9EA -> assets/images/ui/stat_potion.png
+- 1F4DA -> assets/images/ui/stat_deck.png
+- 1F48E -> assets/images/ui/stat_relic.png
