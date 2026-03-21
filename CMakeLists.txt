@@ -31,6 +31,9 @@ if (NOT USE_SYSTEM_SFML)
     set(SFML_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(SFML_BUILD_DOC OFF CACHE BOOL "" FORCE)
     set(BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+    if (ENABLE_AUDIO AND NOT MSVC)
+        set(SFML_DISABLE_FLAC ON CACHE BOOL "" FORCE)
+    endif()
 
     FetchContent_MakeAvailable(sfml)
 else()
@@ -41,13 +44,21 @@ else()
     endif()
 endif()
 
+if (ENABLE_AUDIO AND NOT MSVC)
+    set(MINGW_COMPAT_SRC src/mingw_compat.cpp)
+else()
+    set(MINGW_COMPAT_SRC "")
+endif()
+
 add_executable(MiniSpireSFML
     src/main.cpp
+    ${MINGW_COMPAT_SRC}
 )
 
 if (BUILD_SELF_TEST)
     add_executable(MiniSpireSelfTest
         src/main.cpp
+        ${MINGW_COMPAT_SRC}
     )
 endif()
 
@@ -79,6 +90,27 @@ if (NOT USE_SYSTEM_SFML)
         "${CMAKE_BINARY_DIR}/_deps/sfml-build/lib"
         "$<TARGET_FILE_DIR:MiniSpireSFML>"
     )
+    if (ENABLE_AUDIO)
+        add_custom_command(TARGET MiniSpireSFML POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_BINARY_DIR}/_deps/sfml-src/extlibs/bin/x64/openal32.dll"
+            "$<TARGET_FILE_DIR:MiniSpireSFML>"
+        )
+    endif()
+    if (BUILD_SELF_TEST)
+        add_custom_command(TARGET MiniSpireSelfTest POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_BINARY_DIR}/_deps/sfml-build/lib"
+            "$<TARGET_FILE_DIR:MiniSpireSelfTest>"
+        )
+        if (ENABLE_AUDIO)
+            add_custom_command(TARGET MiniSpireSelfTest POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_BINARY_DIR}/_deps/sfml-src/extlibs/bin/x64/openal32.dll"
+                "$<TARGET_FILE_DIR:MiniSpireSelfTest>"
+            )
+        endif()
+    endif()
 endif()
 
 if (MSVC)

@@ -52,7 +52,8 @@ Used files:
 - assets/images/backgrounds/battle.png
 - assets/images/backgrounds/campfire.png
 - assets/images/backgrounds/shop.png
-- assets/images/backgrounds/event.png
+- assets/images/backgrounds/event1.png (Event 1: 神殿祭坛)
+- assets/images/backgrounds/event2.png (Event 2: 森林小路)
 - assets/images/backgrounds/defeat.png
 - assets/images/backgrounds/victory.png
 - Note: These images are algorithmically generated in-repo and do not pull pixel data from third-party image packs.
@@ -96,6 +97,7 @@ Used BGM files (when download succeeds):
 - assets/audio/bgm/shop.wav
 - assets/audio/bgm/event.wav
 - assets/audio/bgm/defeat.wav
+- assets/audio/bgm/victory_boss.wav (Final Boss victory theme)
 
 ## Fonts
 

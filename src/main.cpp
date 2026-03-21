@@ -1,4 +1,4 @@
-﻿#include <SFML/Graphics.hpp>
+#include <SFML/Graphics.hpp>
 
 // SFML Audio is optional - gracefully degrades when unavailable
 #ifndef USE_AUDIO
@@ -532,7 +532,8 @@ private:
     sf::Texture bgBattle;
     sf::Texture bgCampfire;
     sf::Texture bgShop;
-    sf::Texture bgEvent;
+    sf::Texture bgEvent1;  // Event 1: 神殿祭坛
+    sf::Texture bgEvent2;  // Event 2: 森林小路
     sf::Texture bgDefeat;
     sf::Texture bgVictory;
 
@@ -867,7 +868,8 @@ private:
         loadTexture(bgBattle, "assets/images/backgrounds/battle.png");
         loadTexture(bgCampfire, "assets/images/backgrounds/campfire.png");
         loadTexture(bgShop, "assets/images/backgrounds/shop.png");
-        loadTexture(bgEvent, "assets/images/backgrounds/event.png");
+        loadTexture(bgEvent1, "assets/images/backgrounds/event1.png");
+        loadTexture(bgEvent2, "assets/images/backgrounds/event2.png");
         loadTexture(bgDefeat, "assets/images/backgrounds/defeat.png");
         loadTexture(bgVictory, "assets/images/backgrounds/victory.png");
 
@@ -892,14 +894,21 @@ private:
 
     std::string resolveBgmPath(const std::string& preferredPath) const {
         namespace fs = std::filesystem;
-        if (fs::exists(preferredPath)) {
-            return preferredPath;
-        }
+        std::string basePath = preferredPath;
         if (preferredPath.size() > 4 && preferredPath.substr(preferredPath.size() - 4) == ".mp3") {
-            const std::string wavFallback = preferredPath.substr(0, preferredPath.size() - 4) + ".wav";
-            if (fs::exists(wavFallback)) {
-                return wavFallback;
-            }
+            basePath = preferredPath.substr(0, preferredPath.size() - 4);
+        }
+        const std::string wavPath = basePath + ".wav";
+        if (fs::exists(wavPath)) {
+            return wavPath;
+        }
+        const std::string mp3Path = basePath + ".mp3";
+        if (fs::exists(mp3Path)) {
+            return mp3Path;
+        }
+        const std::string oggPath = basePath + ".ogg";
+        if (fs::exists(oggPath)) {
+            return oggPath;
         }
         return preferredPath;
     }
@@ -1195,30 +1204,30 @@ private:
             {8, "坚毅", CardType::Skill, 1, 0, 1, 9, 0, 0, 0, 0, 0, 0, true, false, "获得 9 点格挡，消耗"},
             {9, "横扫", CardType::Attack, 1, 7, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 7 点伤害"},
             {10, "战斗恍惚", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, true, false, "抽 2 张牌，消耗"},
-            {11, "铁波", CardType::Attack, 1, 5, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "造成 5 点伤害并获得 5 点格挡"},
+            {11, "铁波斩", CardType::Attack, 1, 5, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "造成 5 点伤害并获得 5 点格挡"},
             {12, "强行防御", CardType::Skill, 1, 0, 1, 14, 0, 0, 0, 0, 0, 0, false, false, "获得 14 点格挡"},
             {13, "耸肩无视", CardType::Skill, 1, 0, 1, 8, 0, 0, 0, 1, 0, 0, false, false, "获得 8 点格挡，抽 1 张牌"},
             {14, "上勾拳", CardType::Attack, 2, 11, 1, 0, 0, 1, 1, 0, 0, 0, false, false, "造成 11 点伤害，施加 1 层虚弱和 1 层易伤"},
             {15, "乱剑雨", CardType::Attack, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 4 点伤害，共 3 次"},
             {16, "极限突破", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "将你的力量翻倍，消耗"},
             {17, "暴走", CardType::Attack, 1, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害"},
-            {18, "献祭", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 3, 1, 6, true, false, "失去 6 点生命，获得 1 点能量并抽 3 张牌，消耗"},
+            {18, "献祭", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 3, 2, 6, true, false, "失去 6 点生命，获得 2 点能量并抽 3 张牌，消耗"},
             {19, "壁垒", CardType::Skill, 2, 0, 1, 30, 0, 0, 0, 0, 0, 0, true, false, "获得 30 点格挡，消耗"},
-            {20, "恶魔形态", CardType::Power, 3, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
+            {20, "恶魔形态", CardType::Power, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, true, "每回合开始获得 3 点力量，消耗"},
 
             {21, "快速检索", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, true, false, "抽 1 张牌，消耗"},
             {22, "战术研读", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 0, 0, false, false, "抽 2 张牌"},
             {23, "沉着", CardType::Skill, 1, 0, 1, 6, 0, 0, 0, 1, 0, 0, false, false, "获得 6 点格挡并抽 1 张牌"},
             {24, "冲刺", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 3, 0, 0, true, false, "抽 3 张牌，消耗"},
-            {25, "窥探弱点", CardType::Skill, 1, 0, 1, 0, 0, 1, 0, 1, 0, 0, false, false, "施加 1 层易伤并抽 1 张牌"},
+            {25, "窥探弱点", CardType::Skill, 1, 0, 1, 0, 0, 2, 0, 2, 0, 0, false, false, "施加 2 层易伤并抽 2 张牌"},
             {26, "武器整备", CardType::Skill, 1, 0, 1, 5, 1, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡并获得 1 点力量"},
-            {27, "疾风连抽", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 4, 0, 0, true, false, "抽 4 张牌，消耗"},
-            {28, "应急补给", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 1, 0, true, false, "抽 2 张牌并获得 1 点能量，消耗"},
+            {27, "疾风连抽", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 6, 0, 0, true, false, "抽 6 张牌，消耗"},
+            {28, "应急补给", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, true, false, "抽 1 张牌并获得 1 点能量，消耗"},
 
             {29, "战斗专注", CardType::Power, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
             {31, "穿刺", CardType::Attack, 1, 12, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "造成 12 点伤害，消耗"},
             {32, "双重格挡", CardType::Skill, 2, 0, 1, 18, 0, 0, 0, 0, 0, 0, true, false, "获得 18 点格挡，消耗"},
-            {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 1, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 1 层易伤，消耗"},
+            {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 2, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 2 层易伤，消耗"},
             {34, "激昂", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, true, false, "获得 2 点力量，消耗"},
             {35, "稳固阵线", CardType::Skill, 1, 0, 1, 10, 0, 0, 0, 0, 0, 0, true, false, "获得 10 点格挡，消耗"},
             {36, "邪恶之刃", CardType::Attack, 2, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害并回复等量生命"},
@@ -3713,7 +3722,11 @@ private:
         } else if (phase == Phase::Shop) {
             drawBackground(bgShop);
         } else if (phase == Phase::Event) {
-            drawBackground(bgEvent);
+            if (currentEventId == 1) {
+                drawBackground(bgEvent1);
+            } else {
+                drawBackground(bgEvent2);
+            }
         } else if (phase == Phase::Defeat) {
             drawBackground(bgDefeat);
         } else if (phase == Phase::VictoryThanks || phase == Phase::Credits) {
@@ -3758,7 +3771,9 @@ private:
             if (currentBgmPath != "assets/audio/bgm/event.mp3") playBgm("assets/audio/bgm/event.mp3");
         } else if (phase == Phase::Defeat) {
             if (currentBgmPath != "assets/audio/bgm/defeat.mp3") playBgm("assets/audio/bgm/defeat.mp3");
-        } else if (phase == Phase::VictoryThanks || phase == Phase::Credits) {
+        } else if (phase == Phase::VictoryThanks) {
+            if (currentBgmPath.find("victory_boss") == std::string::npos) playBgm("assets/audio/bgm/victory_boss");
+        } else if (phase == Phase::Credits) {
             if (currentBgmPath != "assets/audio/bgm/victory.mp3") playBgm("assets/audio/bgm/victory.mp3");
         }
 

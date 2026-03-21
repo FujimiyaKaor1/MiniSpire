@@ -117,16 +117,49 @@ createPNG('shop.png', (x, y) => {
     return [r, g, b];
 });
 
-// Event
-createPNG('event.png', (x, y) => {
+// Event 1: 神殿祭坛 (Temple Altar) - 冷灰主调 + 暗金点缀
+createPNG('event1.png', (x, y) => {
     const ny = y/H, nx = x/W, n = fbm(x, y, 5);
-    let r = 10+n*12, g = 12+n*10, b = 18+n*15;
-    r += Math.exp(-ny*2.5)*0.5*15; g += Math.exp(-ny*2.5)*0.5*35; b += Math.exp(-ny*2.5)*0.5*25;
-    const dx = (nx-0.5)*2, dy = (ny-0.4)*2;
-    const glow = Math.exp(-(dx*dx+dy*dy)*1.5);
-    r += glow*25; g += glow*40; b += glow*35;
-    const edge = Math.pow(Math.min(1, Math.max(Math.abs(nx-0.5), Math.abs(ny-0.5))*2), 1.5);
-    r -= edge*8; g -= edge*6; b -= edge*4;
+    // 冷灰基调
+    let r = 18+n*12, g = 20+n*10, b = 28+n*18;
+    // 暗金点缀 - 中央祭坛光芒
+    const dx = (nx-0.5)*2, dy = (ny-0.6)*2;
+    const altar = Math.exp(-(dx*dx*0.8+dy*dy*1.2)*1.5);
+    r += altar*60; g += altar*45; b += altar*15;
+    // 神殿柱子暗影
+    const pillar1 = Math.exp(-Math.abs(nx-0.25)*12) * (1 - ny);
+    const pillar2 = Math.exp(-Math.abs(nx-0.75)*12) * (1 - ny);
+    r -= (pillar1 + pillar2) * 10;
+    g -= (pillar1 + pillar2) * 8;
+    b -= (pillar1 + pillar2) * 5;
+    // 顶部暗角
+    const vignette = Math.pow(ny, 0.8) * 0.3;
+    r *= (1 - vignette * 0.3);
+    g *= (1 - vignette * 0.3);
+    b *= (1 - vignette * 0.2);
+    return [r, g, b];
+});
+
+// Event 2: 森林小路 (Forest Path) - 冷灰主调 + 幽暗绿光
+createPNG('event2.png', (x, y) => {
+    const ny = y/H, nx = x/W, n = fbm(x+150, y+80, 6);
+    // 冷灰森林基调
+    let r = 12+n*10, g = 18+n*14, b = 16+n*12;
+    // 幽暗绿光 - 从上方穿透树冠
+    const canopy = Math.exp(-ny*3) * 0.5;
+    r += canopy*15; g += canopy*35; b += canopy*20;
+    // 路径光斑
+    const path = Math.exp(-Math.abs(nx-0.5)*4) * Math.exp(-Math.abs(ny-0.7)*3);
+    r += path*25; g += path*20; b += path*10;
+    // 左右树木暗影
+    const leftTree = Math.exp(-Math.abs(nx-0.15)*8);
+    const rightTree = Math.exp(-Math.abs(nx-0.85)*8);
+    r -= (leftTree + rightTree) * 8;
+    g -= (leftTree + rightTree) * 6;
+    b -= (leftTree + rightTree) * 4;
+    // 雾气效果
+    const fog = Math.pow(ny, 1.5) * 0.2;
+    r += fog*20; g += fog*25; b += fog*30;
     return [r, g, b];
 });
 

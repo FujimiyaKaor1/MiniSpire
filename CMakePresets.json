@@ -10,7 +10,7 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_CXX_STANDARD": "17",
         "USE_SYSTEM_SFML": "OFF",
-        "ENABLE_AUDIO": "OFF"
+        "ENABLE_AUDIO": "ON"
       }
     }
   ],

@@ -1,143 +1,58 @@
-## 用户需求
+## **Plan: 尖塔风格美术与音频升级**
 
-将游戏整体美化，包括以下内容：
+已完成代码与资源链路调研，并按你确认的方向收敛为可执行方案：手绘暗黑奇幻、仅 CC0/免署名优先、史诗黑暗音频、先交付高品质可落地版。实现上采用“最小代码改动 + 大部分资源替换”，重点是事件双背景与最终 Boss 胜利音乐独立化。
 
-### 背景图片（7种场景）
-- 主菜单背景图片
-- 战斗背景图片
-- 火堆背景图片
-- 商店背景图片
-- 事件背景图片
-- 战败背景图片
-- 感谢游玩背景图片
+**Steps**
 
-### 敌人图片（8种不同敌人）
-- 普通敌人：黏液斗士、邪教徒、寄生突袭者、刀盾卫兵
-- 精英敌人：装甲骑士、鲜血斗士、诅咒祭司
-- BOSS：尖塔守卫
+1. 阶段 A（阻塞后续）：建立资源准入规则
+2. 仅采纳可验证 CC0 或等价免署名许可资源；排除许可不清、仅预览可用、禁止再分发素材。
+3. 锁定统一美术规则：冷灰主调 + 暗金点缀、低饱和高对比、统一光源方向、避免照片感混入。
+4. 阶段 B（依赖 A）：背景升级
+5. 替换主菜单为尖塔外景、战斗为尖塔内部、商店为路边摊垫子、火堆为篝火场景。
+6. 将事件背景拆分为事件1（神殿祭坛）与事件2（森林小路），代码按 currentEventId 渲染对应背景。
+7. 阶段 C（可与 B 后半并行）：音频升级
+8. 升级场景 BGM（主菜单/战斗/商店/火堆/事件/失败/胜利）为史诗黑暗气质，保留现有命名映射。
+9. 升级玩家与敌人攻击/受击音效，先替换 sword\_attack、player\_hit、enemy\_hit，并做音量层级校准。
+10. 新增最终 Boss 胜利专属 BGM 映射，仅用于 VictoryThanks；Credits 维持通用胜利曲或单独曲目（二选一）。
+11. 阶段 D（依赖 B/C）：合规与回归
+12. 更新第三方许可台账，逐条记录文件-来源-许可-作者-下载日期-是否改动。
+13. 同步下载脚本或资源说明，保证素材来源可复现。
+14. 执行构建、测试、全流程运行与“高级感审查”（色调统一、构图留白、音量一致性）。
 
-### 卡牌美化
-- 卡牌字体美化（使用更适合游戏的中文字体）
-- 升级后的卡牌字体颜色变为绿色
+**Relevant files**
 
-### UI图标
-- 为玩家生命值添加图标
-- 为玩家能量/费用添加图标
+- [main.cpp](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 背景纹理声明与加载、事件渲染分支、Phase-BGM 映射、SFX 触发点
+- [main\_menu.png](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 主菜单背景
+- [battle.png](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 战斗背景
+- [shop.png](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 商店背景
+- [campfire.png](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 火堆背景
+- [event.png](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 当前事件背景基线（将拆分为两张）
+- [bgm](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 各阶段 BGM 资源目录
+- [sfx](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 攻击/受击等音效目录
+- [THIRD\_PARTY\_LICENSES.md](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 许可台账
+- [download\_beautify\_assets.ps1](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 资源获取流程
+- [download\_beautify.js](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 下载映射逻辑
+- [generate\_backgrounds.js](vscode-file://vscode-app/c:/Users/csj/AppData/Local/Programs/Microsoft%20VS%20Code/07ff9d6178/resources/app/out/vs/code/electron-browser/workbench/workbench.html) - 背景兜底生成逻辑（需同步事件双背景兜底）
 
-### 音频系统
-- 添加背景音乐
-- 添加攻击音效
-- 添加受伤音效
+**Verification**
 
-### 约束条件
-- 文本位置不需要变动
-- 保证安全的情况下联网获取开源素材
-- 素材来源需符合CC0或免费商用许可
+1. 资源完整性检查：背景命名与数量覆盖主菜单、战斗、商店、火堆、事件1、事件2、失败、胜利。
+2. 构建验证：cmake --preset default；cmake --build --preset default。
+3. 测试验证：ctest --preset default --output-on-failure。
+4. 运行验证：主菜单到最终 Boss 通关全流程，确认 BGM/SFX 触发正确且无回退报错。
+5. 合规验证：台账中每条来源可回溯到具体文件与链接。
+6. 质感验证：统一色调、对比度、空间留白与音量峰值一致性。
 
-## 技术栈
+**Decisions**
 
-- **现有技术**：C++17 + SFML 2.6.1 + CMake
-- **音频系统**：SFML内置音频模块
-  - `sf::Music`：用于背景音乐（支持流式播放）
-  - `sf::SoundBuffer` + `sf::Sound`：用于短音效
+- 视觉：手绘暗黑奇幻（接近尖塔系 roguelike 气质）
+- 许可：仅 CC0/免署名优先，安全优先
+- 音频：史诗黑暗、强调压迫感
+- 交付策略：先完成高品质可落地版，再做二轮精修
+- 本轮不包含：玩法数值改动、UI 结构重做、音频设置菜单
 
-## 素材来源
+我已将同版完整计划同步到会话计划文件：memories/session/plan.md。如果你确认这份计划，我下一步会按这个顺序进入实现执行。
 
-### 图片素材（CC0许可）
-- **Kenney.nl**：提供UI、地牢、RPG等游戏素材，CC0许可可商用
-- **OpenGameArt.org**：Instant Dungeon Art Pack等素材包
+已完成本轮要求：完成只读调研、联网许可核验、关键需求对齐，并已将可执行升级方案写入会话计划文件，当前计划可直接用于后续实施。
 
-### 音频素材
-- **Mixkit.co**：免费可商用音效（剑击、受伤等）
-- **Pixabay.com/music**：免费背景音乐
-
-### 字体素材
-- **站酷酷黑体**：免费商用中文字体，适合游戏UI
-- **站酷庆科黄油体**：适合标题展示
-
-## 实现方案
-
-### 1. 背景图片系统
-在Game类中添加背景纹理变量，修改render函数在各阶段绘制背景：
-```cpp
-sf::Texture bgMainMenuTex;
-sf::Texture bgBattleTex;
-sf::Texture bgCampfireTex;
-sf::Texture bgShopTex;
-sf::Texture bgEventTex;
-sf::Texture bgDefeatTex;
-sf::Texture bgVictoryTex;
-```
-
-### 2. 敌人图片系统
-扩展enemyPortrait()函数，为8种敌人分配不同纹理：
-```cpp
-sf::Texture enemySlimeTex;      // 黏液斗士
-sf::Texture enemyCultistTex;    // 邪教徒
-sf::Texture enemyParasiteTex;   // 寄生突袭者
-sf::Texture enemyGuardTex;      // 刀盾卫兵
-sf::Texture eliteKnightTex;     // 装甲骑士
-sf::Texture eliteFighterTex;    // 鲜血斗士
-sf::Texture elitePriestTex;     // 诅咒祭司
-sf::Texture bossTex;            // 尖塔守卫
-```
-
-### 3. 升级卡牌绿色显示
-修改cardColor()函数，增加升级卡牌判断：
-```cpp
-sf::Color cardColor(CardType type, bool isUpgraded) const {
-    if (isUpgraded) return sf::Color(80, 200, 120); // 绿色
-    // 原有颜色逻辑...
-}
-```
-
-### 4. 音频系统架构
-```cpp
-// 背景音乐
-sf::Music bgmMainMenu;
-sf::Music bgmBattle;
-sf::Music bgmCampfire;
-sf::Music bgmShop;
-
-// 音效缓冲
-sf::SoundBuffer sfxAttackBuffer;
-sf::SoundBuffer sfxHitBuffer;
-sf::SoundBuffer sfxHurtBuffer;
-sf::Sound sfxAttack;
-sf::Sound sfxHit;
-sf::Sound sfxHurt;
-```
-
-### 5. 目录结构调整
-```
-assets/
-├── images/
-│   ├── backgrounds/     # [NEW] 背景图片
-│   ├── enemies/         # [MODIFY] 8种敌人图片
-│   ├── cards/           # 卡牌图标
-│   └── ui/              # UI图标
-├── audio/               # [NEW] 音频文件
-│   ├── music/           # 背景音乐
-│   └── sfx/             # 音效
-└── fonts/               # 字体文件
-```
-
-## 实现注意事项
-
-1. **素材下载脚本**：创建PowerShell脚本安全下载素材，记录来源和许可
-2. **音频延迟**：音效预加载到缓冲区，避免播放延迟
-3. **内存管理**：背景图片尺寸控制在合理范围（1280x720）
-4. **向后兼容**：素材加载失败时使用占位图，不影响游戏运行
-5. **音量控制**：可考虑添加配置项控制音量
-
-## Agent Extensions
-
-### Skill
-- **browser-automation**：用于自动访问素材网站（Kenney.nl、Mixkit.co、Pixabay等），批量下载符合游戏风格的免费可商用素材
-  - 目的：安全获取背景图片、音效、音乐素材
-  - 预期结果：下载的素材保存到assets目录对应位置
-
-### SubAgent
-- **code-explorer**：用于深入探索代码库，确保所有需要修改的渲染函数都被识别
-  - 目的：找到所有需要添加背景绘制、音效触发的代码位置
-  - 预期结果：完整的修改点清单
+已按要求补齐完成标记流程：我已先发送简要完成说明，并调用了 task\_complete 工具完成本轮任务收尾。
