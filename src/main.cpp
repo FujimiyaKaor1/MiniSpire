@@ -37,6 +37,8 @@ struct CardDef {
     bool grantsStrengthPerTurn;
     std::string desc;
     bool healFromDamage = false;
+    bool grantsEnergyPerTurn = false;
+    bool redrawByExhaustingHand = false;
 };
 
 struct FloorNode {
@@ -183,9 +185,59 @@ public:
         expensive.damage = 20;
         expensive.block = 0;
         expensive.draw = 0;
+        expensive.gainEnergy = 0;
         expensive.grantsStrengthPerTurn = true;
         expensive.exhaust = false;
-        expect(calculateCardPrice(expensive) == 124, "shop price high value card");
+        expect(calculateCardPrice(expensive) == 146, "shop price high value card");
+
+        CardDef drawEngine{};
+        drawEngine.cost = 1;
+        drawEngine.damage = 0;
+        drawEngine.block = 0;
+        drawEngine.draw = 4;
+        drawEngine.gainEnergy = 1;
+        drawEngine.grantsStrengthPerTurn = false;
+        drawEngine.exhaust = true;
+        expect(calculateCardPrice(drawEngine) == 106, "shop price draw engine card");
+
+        CardDef perTurnEnergy{};
+        perTurnEnergy.cost = 2;
+        perTurnEnergy.damage = 0;
+        perTurnEnergy.block = 0;
+        perTurnEnergy.draw = 0;
+        perTurnEnergy.gainEnergy = 0;
+        perTurnEnergy.grantsStrengthPerTurn = false;
+        perTurnEnergy.grantsEnergyPerTurn = true;
+        perTurnEnergy.redrawByExhaustingHand = false;
+        perTurnEnergy.exhaust = true;
+        expect(calculateCardPrice(perTurnEnergy) == 102, "shop price per-turn energy card");
+
+        CardDef redrawTool{};
+        redrawTool.cost = 1;
+        redrawTool.damage = 0;
+        redrawTool.block = 0;
+        redrawTool.draw = 0;
+        redrawTool.gainEnergy = 0;
+        redrawTool.grantsStrengthPerTurn = false;
+        redrawTool.grantsEnergyPerTurn = false;
+        redrawTool.redrawByExhaustingHand = true;
+        redrawTool.exhaust = false;
+        expect(calculateCardPrice(redrawTool) == 70, "shop price redraw card");
+
+        CardDef midValue{};
+        midValue.cost = 1;
+        midValue.damage = 8;
+        midValue.block = 0;
+        midValue.draw = 2;
+        midValue.gainEnergy = 0;
+        midValue.grantsStrengthPerTurn = false;
+        midValue.exhaust = false;
+
+        CardDef highValue = midValue;
+        highValue.draw = 4;
+        highValue.gainEnergy = 1;
+        highValue.exhaust = true;
+        expect(calculateCardPrice(highValue) > calculateCardPrice(midValue), "shop price monotonic high value");
 
         CardDef bounded{};
         bounded.cost = 10;
@@ -194,11 +246,13 @@ public:
         bounded.draw = 0;
         bounded.grantsStrengthPerTurn = true;
         bounded.exhaust = false;
-        expect(calculateCardPrice(bounded) == 180, "shop price upper clamp");
+        expect(calculateCardPrice(bounded) == 190, "shop price upper clamp");
 
         expect(battleGoldForFloor(0) == 35, "battle gold floor 1");
         expect(battleGoldForFloor(5) == 50, "battle gold floor 6");
-        expect(battleGoldForFloor(14) == 75, "battle gold floor 15 cap");
+        expect(battleGoldForFloor(14) == 85, "battle gold floor 15 cap");
+        expect(battleRoomBonus(true, false) == 12, "battle gold elite bonus");
+        expect(battleRoomBonus(false, true) == 25, "battle gold boss bonus");
 
         expect(isValidEventChoice(1, 0), "event 1 option 0 valid");
         expect(isValidEventChoice(1, 1), "event 1 option 1 valid");
@@ -206,6 +260,117 @@ public:
         expect(isValidEventChoice(2, 1), "event 2 option 1 valid");
         expect(!isValidEventChoice(1, 2), "event invalid option rejected");
         expect(!isValidEventChoice(99, 0), "unknown event rejected");
+        expect(eventGoldReward(1, 1) == 80, "event 1 gold reward amount");
+        expect(eventGoldReward(1, 0) == 0, "event 1 hp branch gold reward");
+        expect(eventGoldReward(2, 1) == 0, "event 2 no gold reward");
+        expect(turnStartEnergy(0) == 3, "turn start base energy");
+        expect(turnStartEnergy(2) == 5, "turn start bonus energy");
+        expect(validateFlatEnergyCurve(2, 3, 5), "stacked energy flat curve");
+        expect(stokeRedrawCountFromHandSize(1) == 0, "stoke redraw count single card");
+        expect(stokeRedrawCountFromHandSize(4) == 3, "stoke redraw count hand size 4");
+        expect(simulateDrawCount(4, 0, 6, 0) == 4, "stoke draw with reshuffle");
+        expect(simulateDrawCount(9, 0, 8, 0) == 8, "stoke draw bounded by total cards");
+        expect(simulateDrawCount(5, 20, 0, 8) == 2, "stoke draw respects hand limit");
+
+        std::vector<int> testHand{11, 12, 13};
+        std::vector<int> testExhaust;
+        moveAllHandCardsToExhaust(testHand, testExhaust);
+        expect(testHand.empty(), "stoke clears remaining hand");
+        expect(testExhaust.size() == 3u, "stoke moves all remaining cards to exhaust");
+
+        CardDef bloodletting{};
+        bloodletting.id = 37;
+        bloodletting.name = "放血";
+        bloodletting.type = CardType::Skill;
+        bloodletting.cost = 0;
+        bloodletting.damage = 0;
+        bloodletting.hits = 1;
+        bloodletting.block = 0;
+        bloodletting.gainStrength = 0;
+        bloodletting.applyVulnerable = 0;
+        bloodletting.applyWeak = 0;
+        bloodletting.draw = 0;
+        bloodletting.gainEnergy = 2;
+        bloodletting.loseHp = 3;
+        bloodletting.exhaust = false;
+        bloodletting.grantsStrengthPerTurn = false;
+        bloodletting.desc = "失去 3 点生命，获得 2 点能量";
+        const CardDef bloodlettingUp = buildUpgradedCard(bloodletting);
+        expect(bloodlettingUp.cost == 0 && bloodlettingUp.gainEnergy == 3 && bloodlettingUp.loseHp == 3, "upgrade bloodletting exact");
+        expect(netEnergyAfterPlay(3, bloodletting.cost, bloodletting.gainEnergy) == 5, "bloodletting net energy");
+
+        CardDef fury{};
+        fury.id = 38;
+        fury.name = "盛怒";
+        fury.type = CardType::Skill;
+        fury.cost = 1;
+        fury.damage = 0;
+        fury.hits = 1;
+        fury.block = 0;
+        fury.gainStrength = 0;
+        fury.applyVulnerable = 0;
+        fury.applyWeak = 0;
+        fury.draw = 0;
+        fury.gainEnergy = 2;
+        fury.loseHp = 0;
+        fury.exhaust = true;
+        fury.grantsStrengthPerTurn = false;
+        fury.desc = "获得 2 点能量，消耗";
+        const CardDef furyUp = buildUpgradedCard(fury);
+        expect(furyUp.cost == 0 && furyUp.gainEnergy == 2, "upgrade fury exact");
+        expect(calculateCardPrice(fury) == 76, "shop price fury burst energy");
+        expect(netEnergyAfterPlay(3, fury.cost, fury.gainEnergy) == 4, "fury net energy");
+        expect(netEnergyAfterPlay(3, furyUp.cost, furyUp.gainEnergy) == 5, "fury+ net energy");
+        expect(equalsIntVector(simulateEnergyAfterPlaySequence(3, {{bloodletting.cost, bloodletting.gainEnergy}, {fury.cost, fury.gainEnergy}, {furyUp.cost, furyUp.gainEnergy}}), {5, 6, 8}), "energy combo sequence bloodletting->fury->fury+");
+
+        CardDef source{};
+        source.id = 39;
+        source.name = "薪火之源";
+        source.type = CardType::Power;
+        source.cost = 2;
+        source.damage = 0;
+        source.hits = 1;
+        source.block = 0;
+        source.gainStrength = 0;
+        source.applyVulnerable = 0;
+        source.applyWeak = 0;
+        source.draw = 0;
+        source.gainEnergy = 0;
+        source.loseHp = 0;
+        source.exhaust = true;
+        source.grantsStrengthPerTurn = false;
+        source.grantsEnergyPerTurn = true;
+        source.desc = "每回合开始时获得 1 点能量，消耗";
+        const CardDef sourceUp = buildUpgradedCard(source);
+        expect(sourceUp.cost == 1 && sourceUp.grantsEnergyPerTurn, "upgrade source of flame exact");
+        expect(calculateCardPrice(sourceUp) == 92, "shop price source+ low cost per-turn energy");
+        expect(equalsIntVector(simulateTurnStartEnergyWithSourcePlays({1, 0, 0}), {3, 4, 4}), "source cross-turn energy single stack");
+        expect(equalsIntVector(simulateTurnStartEnergyWithSourcePlays({1, 1, 0}), {3, 4, 5}), "source cross-turn energy double stack");
+
+        CardDef stoke{};
+        stoke.id = 40;
+        stoke.name = "添柴";
+        stoke.type = CardType::Skill;
+        stoke.cost = 1;
+        stoke.damage = 0;
+        stoke.hits = 1;
+        stoke.block = 0;
+        stoke.gainStrength = 0;
+        stoke.applyVulnerable = 0;
+        stoke.applyWeak = 0;
+        stoke.draw = 0;
+        stoke.gainEnergy = 0;
+        stoke.loseHp = 0;
+        stoke.exhaust = false;
+        stoke.grantsStrengthPerTurn = false;
+        stoke.redrawByExhaustingHand = true;
+        stoke.desc = "消耗手牌中其余所有卡牌，然后抽取等量卡牌";
+        const CardDef stokeUp = buildUpgradedCard(stoke);
+        expect(stokeUp.cost == 0 && stokeUp.redrawByExhaustingHand, "upgrade stoke exact");
+        expect(simulateStokeDrawAfterExhaust(5, 6, 0) == 4, "stoke full redraw when draw pile sufficient");
+        expect(simulateStokeDrawAfterExhaust(5, 2, 1) == 3, "stoke redraw limited by available piles");
+        expect(simulateStokeDrawAfterExhaust(10, 20, 0) == 9, "stoke redraw with large hand");
+        expect(equalsIntVector(simulateStokeConsecutiveTurnDraws({5, 4}, 8, 3), {4, 3}), "stoke consecutive turn draws");
 
         out << (success ? "SELF_TEST_PASS" : "SELF_TEST_FAIL") << '\n';
         return success;
@@ -281,6 +446,7 @@ private:
 
     int playerEnergy = 3;
     int playerStrengthPerTurn = 0;
+    int playerEnergyPerTurn = 0;
     int totalWins = 0;
     int gold = 99;
     int potionCount = 1;
@@ -531,7 +697,6 @@ private:
             {2, "防御", CardType::Skill, 1, 0, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡"},
             {3, "重击", CardType::Attack, 2, 8, 1, 0, 0, 2, 0, 0, 0, 0, false, false, "造成 8 点伤害，施加 2 层易伤"},
             {4, "重斩", CardType::Attack, 2, 14, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 14 点伤害"},
-            {5, "立盾", CardType::Skill, 1, 0, 1, 8, 0, 0, 0, 0, 0, 0, false, false, "获得 8 点格挡"},
             {6, "怒火", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, false, false, "获得 2 点力量"},
             {7, "震击", CardType::Attack, 1, 9, 1, 0, 0, 0, 0, 1, 0, 0, false, false, "造成 9 点伤害，抽 1 张牌"},
             {8, "坚毅", CardType::Skill, 1, 0, 1, 9, 0, 0, 0, 0, 0, 0, true, false, "获得 9 点格挡，消耗"},
@@ -558,18 +723,27 @@ private:
             {28, "应急补给", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 1, 0, true, false, "抽 2 张牌并获得 1 点能量，消耗"},
 
             {29, "战斗专注", CardType::Power, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
-            {30, "护体术", CardType::Skill, 1, 0, 1, 12, 0, 0, 0, 0, 0, 0, true, false, "获得 12 点格挡，消耗"},
             {31, "穿刺", CardType::Attack, 1, 12, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "造成 12 点伤害，消耗"},
             {32, "双重格挡", CardType::Skill, 2, 0, 1, 18, 0, 0, 0, 0, 0, 0, true, false, "获得 18 点格挡，消耗"},
             {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 1, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 1 层易伤，消耗"},
             {34, "激昂", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, true, false, "获得 2 点力量，消耗"},
             {35, "稳固阵线", CardType::Skill, 1, 0, 1, 10, 0, 0, 0, 0, 0, 0, true, false, "获得 10 点格挡，消耗"},
-            {36, "邪恶之刃", CardType::Attack, 2, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害并回复等量生命"}
+            {36, "邪恶之刃", CardType::Attack, 2, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害并回复等量生命"},
+            {37, "放血", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 0, 2, 3, false, false, "失去 3 点生命，获得 2 点能量"},
+            {38, "盛怒", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 2, 0, true, false, "获得 2 点能量，消耗"},
+            {39, "薪火之源", CardType::Power, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "每回合开始时获得 1 点能量，消耗"},
+            {40, "添柴", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "消耗手牌中其余所有卡牌，然后抽取等量卡牌"}
         };
 
         for (auto& c : cardPool) {
             if (c.id == 36) {
                 c.healFromDamage = true;
+            }
+            if (c.id == 39) {
+                c.grantsEnergyPerTurn = true;
+            }
+            if (c.id == 40) {
+                c.redrawByExhaustingHand = true;
             }
         }
 
@@ -577,36 +751,7 @@ private:
         upgradedCards.reserve(cardPool.size());
         for (const auto& base : cardPool) {
             baseCardIds.push_back(base.id);
-
-            CardDef up = base;
-            up.id = 100 + base.id;
-            up.name = base.name + "+";
-            if (up.cost > 1) {
-                up.cost -= 1;
-            }
-            if (up.damage > 0) {
-                up.damage += 3;
-            }
-            if (up.block > 0) {
-                up.block += 3;
-            }
-            if (up.draw > 0) {
-                up.draw += 1;
-            }
-            if (up.gainStrength > 0) {
-                up.gainStrength += 1;
-            }
-            if (up.applyWeak > 0) {
-                up.applyWeak += 1;
-            }
-            if (up.applyVulnerable > 0) {
-                up.applyVulnerable += 1;
-            }
-            if (up.loseHp > 0) {
-                up.loseHp = std::max(0, up.loseHp - 2);
-            }
-            up.desc += "（升级）";
-            upgradedCards.push_back(up);
+            upgradedCards.push_back(buildUpgradedCard(base));
         }
 
         for (const auto& up : upgradedCards) {
@@ -642,16 +787,16 @@ private:
             {{"格挡 10 + 强化 +1 力量", 0, 1, 10, 1, 0, 0}, {"攻击 11", 11, 1, 0, 0, 0, 0}, {"攻击 7 x2", 7, 2, 0, 0, 0, 0}, {"施加易伤 1 + 攻击 8", 8, 1, 0, 0, 0, 1}}});
 
         enemySequence.push_back({
-            "精英敌人：鲜血斗士", 88, true, false,
-            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 13", 13, 1, 0, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"施加虚弱 2", 0, 1, 0, 0, 2, 0}}});
+            "精英敌人：鲜血斗士", 96, true, false,
+            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 15", 15, 1, 0, 0, 0, 0}, {"攻击 9 x2", 9, 2, 0, 0, 0, 0}, {"施加虚弱 2", 0, 1, 0, 0, 2, 0}}});
 
         enemySequence.push_back({
-            "精英敌人：诅咒祭司", 100, true, false,
-            {{"施加易伤 2 + 攻击 7", 7, 1, 0, 0, 0, 2}, {"格挡 14", 0, 1, 14, 0, 0, 0}, {"攻击 12", 12, 1, 0, 0, 0, 0}, {"施加虚弱 2 + 攻击 7", 7, 1, 0, 0, 2, 0}}});
+            "精英敌人：诅咒祭司", 108, true, false,
+            {{"施加易伤 2 + 攻击 8", 8, 1, 0, 0, 0, 2}, {"格挡 16", 0, 1, 16, 0, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"施加虚弱 2 + 攻击 8", 8, 1, 0, 0, 2, 0}}});
 
         enemySequence.push_back({
-            "BOSS：尖塔守卫", 120, false, true,
-            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"格挡 16 + 施加虚弱 1", 0, 1, 16, 0, 1, 0}, {"施加易伤 2 + 攻击 10", 10, 1, 0, 0, 0, 2}}});
+            "BOSS：尖塔守卫", 138, false, true,
+            {{"强化 +3 力量", 0, 1, 0, 3, 0, 0}, {"攻击 17", 17, 1, 0, 0, 0, 0}, {"攻击 10 x2", 10, 2, 0, 0, 0, 0}, {"格挡 18 + 施加虚弱 2", 0, 1, 18, 0, 2, 0}, {"施加易伤 2 + 攻击 13", 13, 1, 0, 0, 0, 2}}});
 
         floorPlan = defaultFloorPlan();
     }
@@ -703,18 +848,59 @@ private:
     }
 
     static int calculateCardPrice(const CardDef& c) {
-        int price = 40 + c.cost * 18;
-        if (c.damage >= 12 || c.block >= 12 || c.draw >= 3 || c.grantsStrengthPerTurn) {
-            price += 30;
+        int price = 40 + c.cost * 20;
+        if (c.damage >= 12 || c.block >= 12) {
+            price += 24;
+        }
+        if (c.draw >= 2) {
+            price += 18;
+        }
+        if (c.draw >= 4) {
+            price += 10;
+        }
+        if (c.gainEnergy > 0) {
+            price += 14;
+        }
+        if (c.gainEnergy >= 2) {
+            price += 8;
+        }
+        if (c.draw >= 3 && c.gainEnergy > 0) {
+            price += 10;
+        }
+        if (c.grantsEnergyPerTurn) {
+            price += 28;
+            if (c.cost <= 1) {
+                price += 10;
+            }
+        }
+        if (c.redrawByExhaustingHand) {
+            price += 10;
+        }
+        if (c.grantsStrengthPerTurn) {
+            price += 22;
+            if (c.cost <= 2) {
+                price += 8;
+            }
         }
         if (c.exhaust) {
-            price -= 5;
+            price -= 6;
         }
-        return std::clamp(price, 35, 180);
+        return std::clamp(price, 35, 190);
     }
 
     static int battleGoldForFloor(int floorIndex) {
-        return std::clamp(35 + floorIndex * 3, 35, 75);
+        const int lateBonus = std::max(0, floorIndex - 9) * 2;
+        return std::clamp(35 + floorIndex * 3 + lateBonus, 35, 85);
+    }
+
+    static int battleRoomBonus(bool isElite, bool isBoss) {
+        if (isBoss) {
+            return 25;
+        }
+        if (isElite) {
+            return 12;
+        }
+        return 0;
     }
 
     static bool isValidEventChoice(int eventId, int option) {
@@ -722,6 +908,194 @@ private:
             return false;
         }
         return eventId == 1 || eventId == 2;
+    }
+
+    static int eventGoldReward(int eventId, int option) {
+        if (eventId == 1 && option == 1) {
+            return 80;
+        }
+        return 0;
+    }
+
+    static int turnStartEnergy(int energyPerTurn) {
+        return 3 + std::max(0, energyPerTurn);
+    }
+
+    static bool validateFlatEnergyCurve(int energyPerTurn, int turns, int expectedEnergy) {
+        const int normalizedTurns = std::max(0, turns);
+        for (int t = 0; t < normalizedTurns; ++t) {
+            if (turnStartEnergy(energyPerTurn) != expectedEnergy) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static int netEnergyAfterPlay(int startEnergy, int cardCost, int gainEnergy) {
+        return std::max(0, startEnergy - cardCost) + std::max(0, gainEnergy);
+    }
+
+    static std::vector<int> simulateEnergyAfterPlaySequence(int startEnergy, const std::vector<std::pair<int, int>>& costsAndGains) {
+        std::vector<int> energies;
+        energies.reserve(costsAndGains.size());
+        int energy = std::max(0, startEnergy);
+        for (const auto& entry : costsAndGains) {
+            energy = netEnergyAfterPlay(energy, entry.first, entry.second);
+            energies.push_back(energy);
+        }
+        return energies;
+    }
+
+    static bool equalsIntVector(const std::vector<int>& a, const std::vector<int>& b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i] != b[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static std::vector<int> simulateTurnStartEnergyWithSourcePlays(const std::vector<int>& sourcePlaysPerTurn) {
+        std::vector<int> turnStartEnergies;
+        turnStartEnergies.reserve(sourcePlaysPerTurn.size());
+        int energyPerTurn = 0;
+        for (int plays : sourcePlaysPerTurn) {
+            turnStartEnergies.push_back(turnStartEnergy(energyPerTurn));
+            energyPerTurn += std::max(0, plays);
+        }
+        return turnStartEnergies;
+    }
+
+    static int stokeRedrawCountFromHandSize(int handSize) {
+        return std::max(0, handSize - 1);
+    }
+
+    static void moveAllHandCardsToExhaust(std::vector<int>& handCards, std::vector<int>& exhaustPileCards) {
+        for (int id : handCards) {
+            exhaustPileCards.push_back(id);
+        }
+        handCards.clear();
+    }
+
+    static int simulateDrawCount(int requestCount, int drawPileCount, int discardPileCount, int currentHandSize) {
+        const auto result = simulateDrawWithState(requestCount, drawPileCount, discardPileCount, currentHandSize);
+        return result.drawn;
+    }
+
+    struct DrawSimResult {
+        int drawn = 0;
+        int remainingDraw = 0;
+        int remainingDiscard = 0;
+        int endingHand = 0;
+    };
+
+    static DrawSimResult simulateDrawWithState(int requestCount, int drawPileCount, int discardPileCount, int currentHandSize) {
+        int drawn = 0;
+        int drawCount = std::max(0, drawPileCount);
+        int discardCount = std::max(0, discardPileCount);
+        int handSize = std::max(0, currentHandSize);
+        const int target = std::max(0, requestCount);
+
+        for (int i = 0; i < target; ++i) {
+            if (handSize >= 10) {
+                break;
+            }
+            if (drawCount == 0) {
+                if (discardCount == 0) {
+                    break;
+                }
+                drawCount = discardCount;
+                discardCount = 0;
+            }
+            drawCount--;
+            handSize++;
+            drawn++;
+        }
+
+        return {drawn, drawCount, discardCount, handSize};
+    }
+
+    static int simulateStokeDrawAfterExhaust(int handSizeWithStoke, int drawPileCount, int discardPileCount) {
+        const int redraw = stokeRedrawCountFromHandSize(handSizeWithStoke);
+        return simulateDrawCount(redraw, drawPileCount, discardPileCount, 0);
+    }
+
+    static std::vector<int> simulateStokeConsecutiveTurnDraws(
+        const std::vector<int>& handSizesWithStoke,
+        int initialDrawPile,
+        int initialDiscardPile) {
+        int drawPile = std::max(0, initialDrawPile);
+        int discardPile = std::max(0, initialDiscardPile);
+        std::vector<int> draws;
+        draws.reserve(handSizesWithStoke.size());
+
+        for (int handSizeWithStoke : handSizesWithStoke) {
+            const int redraw = stokeRedrawCountFromHandSize(handSizeWithStoke);
+            const DrawSimResult result = simulateDrawWithState(redraw, drawPile, discardPile, 0);
+            draws.push_back(result.drawn);
+            drawPile = result.remainingDraw;
+            discardPile = result.remainingDiscard;
+        }
+
+        return draws;
+    }
+
+    static void applySpecificUpgradeAdjustments(int baseId, CardDef& up) {
+        if (baseId == 37) {
+            up.cost = 0;
+            up.loseHp = 3;
+            up.gainEnergy = 3;
+            up.desc = "失去 3 点生命，获得 3 点能量";
+        }
+        if (baseId == 38) {
+            up.cost = 0;
+            up.gainEnergy = 2;
+            up.desc = "获得 2 点能量，消耗";
+        }
+        if (baseId == 39) {
+            up.cost = 1;
+            up.desc = "每回合开始时获得 1 点能量，消耗";
+        }
+        if (baseId == 40) {
+            up.cost = 0;
+            up.desc = "消耗手牌中其余所有卡牌，然后抽取等量卡牌";
+        }
+    }
+
+    static CardDef buildUpgradedCard(const CardDef& base) {
+        CardDef up = base;
+        up.id = 100 + base.id;
+        up.name = base.name + "+";
+        if (up.cost > 1) {
+            up.cost -= 1;
+        }
+        if (up.damage > 0) {
+            up.damage += 3;
+        }
+        if (up.block > 0) {
+            up.block += 3;
+        }
+        if (up.draw > 0) {
+            up.draw += 1;
+        }
+        if (up.gainStrength > 0) {
+            up.gainStrength += 1;
+        }
+        if (up.applyWeak > 0) {
+            up.applyWeak += 1;
+        }
+        if (up.applyVulnerable > 0) {
+            up.applyVulnerable += 1;
+        }
+        if (up.loseHp > 0) {
+            up.loseHp = std::max(0, up.loseHp - 2);
+        }
+        applySpecificUpgradeAdjustments(base.id, up);
+        up.desc += "（升级）";
+        return up;
     }
 
     int cardPrice(int cardId) const {
@@ -895,9 +1269,10 @@ private:
                 goNextFloor();
                 return;
             }
-            gold += 100;
-            pushLog("你获得 100 金币");
-            showActionHint("获得100金币", sf::Color(200, 255, 160));
+            const int gainedGold = eventGoldReward(currentEventId, option);
+            gold += gainedGold;
+            pushLog("你获得 " + std::to_string(gainedGold) + " 金币");
+            showActionHint("获得" + std::to_string(gainedGold) + "金币", sf::Color(200, 255, 160));
             goNextFloor();
             return;
         }
@@ -965,6 +1340,7 @@ private:
         player.vulnerable = 0;
 
         playerStrengthPerTurn = 0;
+        playerEnergyPerTurn = 0;
         gold = 99;
         potionCount = 1;
         potionMax = 4;
@@ -1001,7 +1377,7 @@ private:
             masterDeck.push_back(2);
         }
         for (int i = 0; i < 2; ++i) {
-            masterDeck.push_back(5);
+            masterDeck.push_back(2);
         }
         masterDeck.push_back(3);
         masterDeck.push_back(21);
@@ -1089,6 +1465,7 @@ private:
         player.weak = 0;
         player.vulnerable = 0;
         playerStrengthPerTurn = 0;
+        playerEnergyPerTurn = 0;
 
         enemyIntentIndex = 0;
 
@@ -1106,7 +1483,7 @@ private:
 
     void startPlayerTurn() {
         player.block = 0;
-        playerEnergy = 3;
+        playerEnergy = turnStartEnergy(playerEnergyPerTurn);
         player.strength += playerStrengthPerTurn;
         drawCards(5);
         turnBannerTimer = 1.1f;
@@ -1122,6 +1499,41 @@ private:
             dmg = static_cast<int>(std::floor(dmg * 1.5f));
         }
         return std::max(0, dmg);
+    }
+
+    int applyCardResourceEffects(const CardDef& card) {
+        if (card.gainEnergy > 0) {
+            playerEnergy += card.gainEnergy;
+            pushLog(card.name + " 使你获得 " + std::to_string(card.gainEnergy) + " 点能量");
+        }
+
+        if (card.loseHp > 0) {
+            player.hp = std::max(0, player.hp - card.loseHp);
+            pushLog(card.name + " 使你失去 " + std::to_string(card.loseHp) + " 点生命");
+        }
+
+        if (card.draw > 0) {
+            drawCards(card.draw);
+            pushLog(card.name + " 让你抽取 " + std::to_string(card.draw) + " 张牌");
+        }
+
+        if (card.redrawByExhaustingHand) {
+            return stokeRedrawCountFromHandSize(static_cast<int>(hand.size()));
+        }
+
+        return 0;
+    }
+
+    void applyCardPersistentGrowthEffects(const CardDef& card) {
+        if (card.grantsStrengthPerTurn) {
+            playerStrengthPerTurn += 1;
+            pushLog("能力生效：每回合开始获得 1 点力量");
+        }
+
+        if (card.grantsEnergyPerTurn) {
+            playerEnergyPerTurn += 1;
+            pushLog("能力生效：每回合开始获得 1 点能量");
+        }
     }
 
     void dealDamage(Combatant& target, int damage, bool targetIsPlayer) {
@@ -1169,10 +1581,7 @@ private:
             player.strength *= 2;
         }
 
-        if (c->grantsStrengthPerTurn) {
-            playerStrengthPerTurn += 1;
-            pushLog("能力生效：每回合开始获得 1 点力量");
-        }
+        applyCardPersistentGrowthEffects(*c);
 
         if (c->damage > 0 && enemy.hp > 0) {
             for (int i = 0; i < c->hits; ++i) {
@@ -1220,26 +1629,19 @@ private:
             spawnFloatingText("虚弱 +" + std::to_string(c->applyWeak), sf::Vector2f(640.f, 238.f), sf::Color(180, 150, 255), 0.9f);
         }
 
-        if (c->gainEnergy > 0) {
-            playerEnergy += c->gainEnergy;
-            pushLog(c->name + " 使你获得 " + std::to_string(c->gainEnergy) + " 点能量");
-        }
-
-        if (c->loseHp > 0) {
-            player.hp = std::max(0, player.hp - c->loseHp);
-            pushLog(c->name + " 使你失去 " + std::to_string(c->loseHp) + " 点生命");
-        }
-
-        if (c->draw > 0) {
-            drawCards(c->draw);
-            pushLog(c->name + " 让你抽取 " + std::to_string(c->draw) + " 张牌");
-        }
+        const int redrawCount = applyCardResourceEffects(*c);
 
         hand.erase(hand.begin() + handIndex);
         if (c->exhaust) {
             exhaustPile.push_back(cardId);
         } else {
             discardPile.push_back(cardId);
+        }
+
+        if (redrawCount > 0) {
+            moveAllHandCardsToExhaust(hand, exhaustPile);
+            drawCards(redrawCount);
+            pushLog(c->name + " 消耗了 " + std::to_string(redrawCount) + " 张手牌并抽取等量卡牌");
         }
 
         if (player.hp <= 0) {
@@ -1255,7 +1657,11 @@ private:
     void onBattleWon() {
         pushLog("战斗胜利");
         potionCount = std::min(potionMax, potionCount + 1);
-        const int battleGold = battleGoldForFloor(currentFloor);
+        const EnemyDef* def = nullptr;
+        if (currentEnemyIndex >= 0 && currentEnemyIndex < static_cast<int>(enemySequence.size())) {
+            def = &enemySequence[currentEnemyIndex];
+        }
+        const int battleGold = battleGoldForFloor(currentFloor) + battleRoomBonus(def && def->elite, def && def->boss);
         gold += battleGold;
         pushLog("获得 " + std::to_string(battleGold) + " 金币与 1 瓶药剂（当前金币 " + std::to_string(gold) + "）");
         showActionHint("战斗奖励：+" + std::to_string(battleGold) + " 金币", sf::Color(200, 255, 170));
@@ -2122,8 +2528,8 @@ private:
             drawText("事件：生锈刀刃", 450.f, 80.f, 54, sf::Color(250, 210, 170));
             drawWrappedText("你在前方看见了一座荒废神殿。祭坛上有一把生锈匕首，似乎在渴望鲜血。", 170.f, 180.f, 28, sf::Color(235, 235, 235), 28);
             drawButton(eventLeftRect, "失去10生命，获得 邪恶之刃", sf::Color(130, 72, 72, 240));
-            drawButton(eventRightRect, "无视匕首，拿走100金币", sf::Color(92, 118, 72, 240));
-            drawText("选项影响：左-10生命，右+100金币", 410.f, 650.f, 22, sf::Color(230, 220, 190));
+            drawButton(eventRightRect, "无视匕首，拿走80金币", sf::Color(92, 118, 72, 240));
+            drawText("选项影响：左-10生命，右+80金币", 410.f, 650.f, 22, sf::Color(230, 220, 190));
             return;
         }
 

@@ -34,6 +34,8 @@ add_executable(MiniSpireSelfTest
 target_link_libraries(MiniSpireSFML PRIVATE sfml-graphics sfml-window sfml-system)
 target_link_libraries(MiniSpireSelfTest PRIVATE sfml-graphics sfml-window sfml-system)
 
+get_filename_component(CXX_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+
 # Copy SFML runtime files beside the exe so launching from the build folder works.
 add_custom_command(TARGET MiniSpireSFML POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
@@ -53,6 +55,6 @@ if (BUILD_TESTING)
     add_test(NAME smoke_self_test COMMAND MiniSpireSelfTest --self-test)
     set_tests_properties(smoke_self_test PROPERTIES
         WORKING_DIRECTORY $<TARGET_FILE_DIR:MiniSpireSelfTest>
-        ENVIRONMENT "PATH=${CMAKE_BINARY_DIR}/_deps/sfml-build/lib;$ENV{PATH}"
+        ENVIRONMENT "PATH=${CXX_COMPILER_DIR};${CMAKE_BINARY_DIR}/_deps/sfml-build/lib;$ENV{PATH}"
     )
 endif()
