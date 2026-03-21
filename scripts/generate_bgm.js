@@ -50,15 +50,7 @@ function makeBGM(name, dur, genFunc) {
     writeWAV(name, SR, samples);
 }
 
-// Play appropriate BGM
-if (phase == Phase::MainMenu) {
-    if (currentBgmPath.find("main_menu") == std::string::npos) 
-        playBgm("assets/audio/bgm/main_menu");
-} else if (phase == Phase::Battle) {
-    if (currentBgmPath.find("battle") == std::string::npos) 
-        playBgm("assets/audio/bgm/battle");
-}
-// ... 其他场景// main_menu.wav - dark atmospheric
+// main_menu.wav - dark atmospheric
 makeBGM('main_menu.wav', 8, (t) => {
     const e = envelope(t, 1, 2, 0.6, 2, 8);
     let s = pad(73.42, t, 0.15) + pad(92.50, t, 0.12) + pad(110.00, t, 0.10);
@@ -114,6 +106,17 @@ makeBGM('defeat.wav', 8, (t) => {
     s += Math.sin(2*Math.PI*n[Math.floor(t*0.4)%4]*t) * 0.04 * (0.5+0.5*Math.sin(t*0.3));
     s += Math.sin(2*Math.PI*55*t) * 0.1;
     return s * e * 0.5;
+});
+
+// victory.wav - cheerful celebration
+makeBGM('victory.wav', 8, (t) => {
+    const e = envelope(t, 0.2, 0.8, 0.75, 1.2, 8);
+    let s = pad(261.63, t, 0.12) + pad(329.63, t, 0.10) + pad(392.00, t, 0.08);
+    const melody = [392.00, 440.00, 493.88, 523.25, 493.88, 440.00, 392.00, 329.63];
+    s += Math.sin(2*Math.PI*melody[Math.floor(t*2)%8]*t) * 0.10 * (0.6+0.4*Math.sin(t*4));
+    s += Math.pow(Math.max(0, Math.sin(t*6.28)), 6) * Math.sin(2*Math.PI*783.99*t) * 0.06;
+    s += Math.sin(2*Math.PI*130.81*t) * 0.06;
+    return s * e * 0.55;
 });
 
 // victory_boss.wav - epic triumph for final boss victory

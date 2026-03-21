@@ -36,7 +36,7 @@ enum class CardType { Attack, Skill, Power };
 enum class Phase { MainMenu, Battle, Reward, Campfire, Shop, Event, DeckEdit, VictoryThanks, Credits, Defeat };
 enum class RoomType { Battle, Campfire, Shop, Event };
 enum class DeckEditMode { None, UpgradeOne, RemoveOne, RemoveTwo };
-enum class PileOverlayType { None, Draw, Discard, Exhaust };
+enum class PileOverlayType { None, Draw, Discard, Exhaust, Deck };
 enum class RelicType { EmberCharm, IronSigil, BloodVial, TacticianLens, ThornEmblem };
 
 struct CardDef {
@@ -59,6 +59,7 @@ struct CardDef {
     bool healFromDamage = false;
     bool grantsEnergyPerTurn = false;
     bool redrawByExhaustingHand = false;
+    bool eventOnly = false;
 };
 
 struct FloorNode {
@@ -450,7 +451,7 @@ public:
         expect(isStarterDeckTemplateValid(starterDeck), "starter deck composition valid");
         expect(hasUniqueRelics({RelicType::EmberCharm, RelicType::IronSigil, RelicType::BloodVial}), "unique relic list valid");
         expect(!hasUniqueRelics({RelicType::EmberCharm, RelicType::EmberCharm}), "duplicate relic list rejected");
-        expect(relicThornDamage(true) == 1, "thorn relic retaliation tuned");
+        expect(relicThornDamage(true) == 3, "thorn relic retaliation tuned");
         expect(relicThornDamage(false) == 0, "thorn retaliation absent without relic");
         expect(relicBattleStartHeal(true) == 5, "blood vial heal tuned");
         expect(relicBattleStartHeal(false) == 0, "blood vial absent no heal");
@@ -546,6 +547,7 @@ private:
     SfxBuffer sfxHealBuf;
     SfxBuffer sfxDefeatBuf;
     SfxBuffer sfxVictoryBuf;
+    SfxBuffer sfxUiClickBuf;
     float sfxCooldown = 0.0f;
 
 #if USE_AUDIO
@@ -585,6 +587,10 @@ private:
     bool campfireDidAction = false;
     DeckEditMode deckEditMode = DeckEditMode::None;
     int deckEditRemaining = 0;
+    int rampageDamageBonus = 0;
+    bool blockPersists = false;
+    bool darkEmbraceActive = false;
+    bool tearActive = false;
 
     std::vector<int> masterDeck;
     std::vector<int> drawPile;
@@ -593,6 +599,7 @@ private:
     std::vector<int> exhaustPile;
 
     std::vector<int> rewardChoices;
+    int eliteRewardPicksRemaining = 0;
     std::vector<RelicType> relics;
     std::deque<std::string> logs;
     std::vector<FloatingText> floatingTexts;
@@ -621,6 +628,7 @@ private:
     sf::FloatRect discardPileRect{1168.f, 300.f, 102.f, 52.f};
     sf::FloatRect exhaustPileRect{1168.f, 360.f, 102.f, 52.f};
     sf::FloatRect pileOverlayCloseRect{930.f, 130.f, 190.f, 42.f};
+    sf::FloatRect bgmToggleRect{1180.f, 660.f, 80.f, 40.f};
 
     float enemyHitFlashTimer = 0.0f;
     float playerHitFlashTimer = 0.0f;
@@ -631,6 +639,8 @@ private:
     bool deckEditAdvanceAfterDone = false;
     bool showOwnedDeckOverlay = false;
     bool showRelicOverlay = false;
+    bool bgmEnabled = true;
+    float bgmVolume = 20.f;
     PileOverlayType activePileOverlay = PileOverlayType::None;
     std::string battleQuoteText;
     float battleQuoteTimer = 0.0f;
@@ -882,6 +892,7 @@ private:
         loadSfxBuffer(sfxHealBuf, "assets/audio/sfx/heal.mp3");
         loadSfxBuffer(sfxDefeatBuf, "assets/audio/sfx/defeat.mp3");
         loadSfxBuffer(sfxVictoryBuf, "assets/audio/sfx/victory.mp3");
+        loadSfxBuffer(sfxUiClickBuf, "assets/audio/sfx/card_play.mp3");
 #endif
     }
 
@@ -919,11 +930,16 @@ private:
         currentBgmPath = resolvedPath;
         if (bgmPlayer.openFromFile(resolvedPath)) {
             bgmPlayer.setLoop(true);
-            bgmPlayer.setVolume(40.f);
+            bgmPlayer.setVolume(bgmEnabled ? bgmVolume : 0.f);
             bgmPlayer.play();
         } else {
             std::cerr << "[warn] BGM加载失败: " << bgmPath << '\n';
         }
+    }
+
+    void toggleBgm() {
+        bgmEnabled = !bgmEnabled;
+        bgmPlayer.setVolume(bgmEnabled ? bgmVolume : 0.f);
     }
 
     void stopBgm() {
@@ -990,7 +1006,7 @@ private:
             case RelicType::IronSigil: return "获得时 +8 最大生命并回复 8 点生命";
             case RelicType::BloodVial: return "每场战斗开始时回复 5 点生命";
             case RelicType::TacticianLens: return "每回合额外抽 1 张牌";
-            case RelicType::ThornEmblem: return "受到攻击时反伤 1";
+            case RelicType::ThornEmblem: return "受到攻击时反伤 3";
             default: return "";
         }
     }
@@ -1034,7 +1050,7 @@ private:
     }
 
     static int relicThornDamage(bool hasThornRelic) {
-        return hasThornRelic ? 1 : 0;
+        return hasThornRelic ? 3 : 0;
     }
 
     bool hasRelic(RelicType relic) const {
@@ -1198,43 +1214,44 @@ private:
             {1, "打击", CardType::Attack, 1, 6, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 6 点伤害"},
             {2, "防御", CardType::Skill, 1, 0, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡"},
             {3, "重击", CardType::Attack, 2, 8, 1, 0, 0, 2, 0, 0, 0, 0, false, false, "造成 8 点伤害，施加 2 层易伤"},
-            {4, "重斩", CardType::Attack, 2, 14, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 14 点伤害"},
             {6, "怒火", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, false, false, "获得 2 点力量"},
-            {7, "震击", CardType::Attack, 1, 9, 1, 0, 0, 0, 0, 1, 0, 0, false, false, "造成 9 点伤害，抽 1 张牌"},
-            {8, "坚毅", CardType::Skill, 1, 0, 1, 9, 0, 0, 0, 0, 0, 0, true, false, "获得 9 点格挡，消耗"},
-            {9, "横扫", CardType::Attack, 1, 7, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 7 点伤害"},
-            {10, "战斗恍惚", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 2, 0, 0, true, false, "抽 2 张牌，消耗"},
-            {11, "铁波斩", CardType::Attack, 1, 5, 1, 5, 0, 0, 0, 0, 0, 0, false, false, "造成 5 点伤害并获得 5 点格挡"},
+            {11, "铁波斩", CardType::Attack, 1, 7, 1, 7, 0, 0, 0, 0, 0, 0, false, false, "造成 7 点伤害并获得 7 点格挡"},
             {12, "强行防御", CardType::Skill, 1, 0, 1, 14, 0, 0, 0, 0, 0, 0, false, false, "获得 14 点格挡"},
-            {13, "耸肩无视", CardType::Skill, 1, 0, 1, 8, 0, 0, 0, 1, 0, 0, false, false, "获得 8 点格挡，抽 1 张牌"},
-            {14, "上勾拳", CardType::Attack, 2, 11, 1, 0, 0, 1, 1, 0, 0, 0, false, false, "造成 11 点伤害，施加 1 层虚弱和 1 层易伤"},
+            {13, "耸肩无视", CardType::Skill, 1, 0, 1, 10, 0, 0, 0, 1, 0, 0, false, false, "获得 10 点格挡，抽 1 张牌"},
+            {14, "上勾拳", CardType::Attack, 2, 10, 1, 0, 0, 2, 2, 0, 0, 0, false, false, "造成 10 点伤害，施加 2 层虚弱和 2 层易伤"},
             {15, "乱剑雨", CardType::Attack, 1, 4, 3, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 4 点伤害，共 3 次"},
             {16, "极限突破", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "将你的力量翻倍，消耗"},
-            {17, "暴走", CardType::Attack, 1, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害"},
-            {18, "献祭", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 3, 2, 6, true, false, "失去 6 点生命，获得 2 点能量并抽 3 张牌，消耗"},
-            {19, "壁垒", CardType::Skill, 2, 0, 1, 30, 0, 0, 0, 0, 0, 0, true, false, "获得 30 点格挡，消耗"},
+            {17, "暴走", CardType::Attack, 1, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害，本场战斗中每打出一次伤害+8"},
+            {18, "献祭", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 5, 2, 6, true, false, "失去 6 点生命，获得 2 点能量并抽 5 张牌，消耗"},
+            {19, "壁垒", CardType::Skill, 2, 0, 1, 12, 0, 0, 0, 0, 0, 0, true, false, "获得 12 点格挡，本场战斗中格挡不再在回合结束时消失，消耗"},
             {20, "恶魔形态", CardType::Power, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, true, "每回合开始获得 3 点力量，消耗"},
 
             {21, "快速检索", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, true, false, "抽 1 张牌，消耗"},
             {22, "战术研读", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 2, 0, 0, false, false, "抽 2 张牌"},
-            {23, "沉着", CardType::Skill, 1, 0, 1, 6, 0, 0, 0, 1, 0, 0, false, false, "获得 6 点格挡并抽 1 张牌"},
             {24, "冲刺", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 3, 0, 0, true, false, "抽 3 张牌，消耗"},
             {25, "窥探弱点", CardType::Skill, 1, 0, 1, 0, 0, 2, 0, 2, 0, 0, false, false, "施加 2 层易伤并抽 2 张牌"},
-            {26, "武器整备", CardType::Skill, 1, 0, 1, 5, 1, 0, 0, 0, 0, 0, false, false, "获得 5 点格挡并获得 1 点力量"},
-            {27, "疾风连抽", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 6, 0, 0, true, false, "抽 6 张牌，消耗"},
+            {27, "潦草急就", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 6, 0, 0, true, false, "抽 6 张牌，消耗"},
             {28, "应急补给", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 1, 1, 0, true, false, "抽 1 张牌并获得 1 点能量，消耗"},
 
             {29, "战斗专注", CardType::Power, 1, 0, 1, 0, 1, 0, 0, 0, 0, 0, true, true, "每回合开始获得 1 点力量，消耗"},
-            {31, "穿刺", CardType::Attack, 1, 12, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "造成 12 点伤害，消耗"},
             {32, "双重格挡", CardType::Skill, 2, 0, 1, 18, 0, 0, 0, 0, 0, 0, true, false, "获得 18 点格挡，消耗"},
-            {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 2, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 2 层易伤，消耗"},
-            {34, "激昂", CardType::Skill, 1, 0, 1, 0, 2, 0, 0, 0, 0, 0, true, false, "获得 2 点力量，消耗"},
-            {35, "稳固阵线", CardType::Skill, 1, 0, 1, 10, 0, 0, 0, 0, 0, 0, true, false, "获得 10 点格挡，消耗"},
-            {36, "邪恶之刃", CardType::Attack, 2, 10, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 10 点伤害并回复等量生命"},
+            {33, "痛击", CardType::Attack, 2, 16, 1, 0, 0, 1, 0, 0, 0, 0, true, false, "造成 16 点伤害并施加 1 层易伤，消耗"},
+            {36, "邪恶之刃", CardType::Attack, 2, 8, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成 8 点伤害并回复等量生命", true, false, false, true},
             {37, "放血", CardType::Skill, 0, 0, 1, 0, 0, 0, 0, 0, 2, 3, false, false, "失去 3 点生命，获得 2 点能量"},
             {38, "盛怒", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 2, 0, true, false, "获得 2 点能量，消耗"},
             {39, "薪火之源", CardType::Power, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "每回合开始时获得 1 点能量，消耗"},
-            {40, "添柴", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "消耗手牌中其余所有卡牌，然后抽取等量卡牌"}
+            {40, "添柴", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "消耗手牌中其余所有卡牌，然后抽取等量卡牌"},
+            {41, "重振精神", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "消耗手牌中所有非攻击牌，每张获得 7 点格挡"},
+            {42, "战鼓", CardType::Skill, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "消耗手牌中所有攻击牌，每张造成 7 点伤害"},
+            {43, "黑暗之拥", CardType::Power, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "本场战斗中，每当你消耗一张牌时抽一张牌，消耗"},
+            {44, "剑柄打击", CardType::Attack, 1, 10, 1, 0, 0, 0, 0, 2, 0, 0, false, false, "造成 10 点伤害，抽 2 张牌"},
+
+            {45, "全身撞击", CardType::Attack, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "造成等同于你格挡值的伤害"},
+            {46, "巩固", CardType::Skill, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, false, "将你的格挡值翻倍"},
+            {47, "威吓", CardType::Skill, 1, 0, 1, 0, 0, 3, 0, 0, 0, 0, true, false, "给敌人 3 层虚弱，消耗"},
+            {48, "撕裂", CardType::Power, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, true, false, "本场战斗中每次失去生命时获得 1 点力量，消耗"},
+            {49, "震荡波", CardType::Skill, 2, 0, 1, 0, 0, 5, 0, 0, 0, 0, true, false, "给敌人 5 层易伤和 5 层虚弱，消耗"},
+            {50, "浴血术", CardType::Attack, 2, 22, 1, 0, 0, 0, 0, 0, 0, 3, false, false, "失去 3 点生命，造成 22 点伤害"}
         };
 
         for (auto& c : cardPool) {
@@ -1269,36 +1286,36 @@ private:
         enemySequence.clear();
 
         enemySequence.push_back({
-            "普通敌人：黏液斗士", 35, false, false,
-            {{"攻击 7", 7, 1, 0, 0, 0, 0}, {"格挡 6 + 攻击 5", 5, 1, 6, 0, 0, 0}, {"攻击 7", 7, 1, 0, 0, 0, 0}}});
+            "普通敌人：黏液斗士", 45, false, false,
+            {{"攻击 9", 9, 1, 0, 0, 0, 0}, {"格挡 8 + 攻击 6", 6, 1, 8, 0, 0, 0}, {"攻击 9", 9, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "普通敌人：邪教徒", 48, false, false,
-            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 6 x2", 6, 2, 0, 0, 0, 0}, {"攻击 10", 10, 1, 0, 0, 0, 0}}});
+            "普通敌人：邪教徒", 60, false, false,
+            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"攻击 12", 12, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "普通敌人：寄生突袭者", 50, false, false,
-            {{"施加虚弱 1 + 攻击 6", 6, 1, 0, 0, 1, 0}, {"攻击 8", 8, 1, 0, 0, 0, 0}, {"格挡 8", 0, 1, 8, 0, 0, 0}}});
+            "普通敌人：寄生突袭者", 65, false, false,
+            {{"施加虚弱 1 + 攻击 8", 8, 1, 0, 0, 1, 0}, {"攻击 10", 10, 1, 0, 0, 0, 0}, {"格挡 10", 0, 1, 10, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "普通敌人：刀盾卫兵", 54, false, false,
-            {{"攻击 8", 8, 1, 0, 0, 0, 0}, {"格挡 10", 0, 1, 10, 0, 0, 0}, {"攻击 6 x2", 6, 2, 0, 0, 0, 0}}});
+            "普通敌人：刀盾卫兵", 70, false, false,
+            {{"攻击 10", 10, 1, 0, 0, 0, 0}, {"格挡 12", 0, 1, 12, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "精英敌人：装甲骑士", 74, true, false,
-            {{"格挡 10 + 强化 +1 力量", 0, 1, 10, 1, 0, 0}, {"攻击 11", 11, 1, 0, 0, 0, 0}, {"攻击 7 x2", 7, 2, 0, 0, 0, 0}, {"施加易伤 1 + 攻击 8", 8, 1, 0, 0, 0, 1}}});
+            "精英敌人：装甲骑士", 95, true, false,
+            {{"格挡 12 + 强化 +1 力量", 0, 1, 12, 1, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"攻击 9 x2", 9, 2, 0, 0, 0, 0}, {"施加易伤 1 + 攻击 10", 10, 1, 0, 0, 0, 1}}});
 
         enemySequence.push_back({
-            "精英敌人：鲜血斗士", 96, true, false,
-            {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 15", 15, 1, 0, 0, 0, 0}, {"攻击 9 x2", 9, 2, 0, 0, 0, 0}, {"施加虚弱 2", 0, 1, 0, 0, 2, 0}}});
+            "精英敌人：鲜血斗士", 120, true, false,
+            {{"强化 +3 力量", 0, 1, 0, 3, 0, 0}, {"攻击 18", 18, 1, 0, 0, 0, 0}, {"攻击 11 x2", 11, 2, 0, 0, 0, 0}, {"施加虚弱 2", 0, 1, 0, 0, 2, 0}}});
 
         enemySequence.push_back({
-            "精英敌人：诅咒祭司", 108, true, false,
-            {{"施加易伤 2 + 攻击 8", 8, 1, 0, 0, 0, 2}, {"格挡 16", 0, 1, 16, 0, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"施加虚弱 2 + 攻击 8", 8, 1, 0, 0, 2, 0}}});
+            "精英敌人：诅咒祭司", 135, true, false,
+            {{"施加易伤 2 + 攻击 10", 10, 1, 0, 0, 0, 2}, {"格挡 20", 0, 1, 20, 0, 0, 0}, {"攻击 16", 16, 1, 0, 0, 0, 0}, {"施加虚弱 2 + 攻击 10", 10, 1, 0, 0, 2, 0}}});
 
         enemySequence.push_back({
-            "BOSS：尖塔守卫", 138, false, true,
-            {{"强化 +3 力量", 0, 1, 0, 3, 0, 0}, {"攻击 17", 17, 1, 0, 0, 0, 0}, {"攻击 10 x2", 10, 2, 0, 0, 0, 0}, {"格挡 18 + 施加虚弱 2", 0, 1, 18, 0, 2, 0}, {"施加易伤 2 + 攻击 13", 13, 1, 0, 0, 0, 2}}});
+            "BOSS：尖塔守卫", 180, false, true,
+            {{"强化 +4 力量", 0, 1, 0, 4, 0, 0}, {"攻击 20", 20, 1, 0, 0, 0, 0}, {"攻击 12 x2", 12, 2, 0, 0, 0, 0}, {"格挡 22 + 施加虚弱 2", 0, 1, 22, 0, 2, 0}, {"施加易伤 2 + 攻击 15", 15, 1, 0, 0, 0, 2}}});
 
         floorPlan = defaultFloorPlan();
     }
@@ -1435,7 +1452,7 @@ private:
 
     static int eventGoldReward(int eventId, int option) {
         if (eventId == 1 && option == 1) {
-            return 80;
+            return 180;
         }
         return 0;
     }
@@ -1660,6 +1677,10 @@ private:
             if (id == 1 || id == 2) {
                 continue;
             }
+            const CardDef* card = findCard(id);
+            if (card && card->eventOnly) {
+                continue;
+            }
             if (std::find(shopChoices.begin(), shopChoices.end(), id) == shopChoices.end()) {
                 shopChoices.push_back(id);
             }
@@ -1781,14 +1802,14 @@ private:
 
         if (currentEventId == 1) {
             if (option == 0) {
-                player.hp = std::max(0, player.hp - 10);
+                player.hp = std::max(0, player.hp - 16);
                 masterDeck.push_back(36);
-                pushLog("你失去 10 点生命，并获得 邪恶之刃");
+                pushLog("你失去 16 点生命，并获得 邪恶之刃");
                 if (player.hp <= 0) {
                     transitionTo(Phase::Defeat, "事件中生命归零");
                     return;
                 }
-                showActionHint("失去10生命，获得邪恶之刃", sf::Color(255, 210, 170));
+                showActionHint("失去16生命，获得邪恶之刃", sf::Color(255, 210, 170));
                 goNextFloor();
                 return;
             }
@@ -1802,13 +1823,24 @@ private:
 
         if (currentEventId == 2) {
             if (option == 0) {
-                player.hp = std::max(0, player.hp - 12);
-                pushLog("你损失了 12 点生命");
-                if (player.hp <= 0) {
-                    transitionTo(Phase::Defeat, "事件中生命归零");
-                    return;
+                std::vector<RelicType> candidates = {
+                    RelicType::EmberCharm,
+                    RelicType::IronSigil,
+                    RelicType::BloodVial,
+                    RelicType::TacticianLens,
+                    RelicType::ThornEmblem
+                };
+                candidates.erase(
+                    std::remove_if(candidates.begin(), candidates.end(), [&](RelicType relic) { return hasRelic(relic); }),
+                    candidates.end());
+                if (!candidates.empty()) {
+                    std::uniform_int_distribution<int> dist(0, static_cast<int>(candidates.size()) - 1);
+                    grantRelic(candidates[dist(rng)]);
+                } else {
+                    gold += 50;
+                    pushLog("你获得 50 金币（遗物已满）");
+                    showActionHint("获得50金币（遗物已满）", sf::Color(255, 226, 150));
                 }
-                showActionHint("失去12生命", sf::Color(255, 180, 180));
                 goNextFloor();
                 return;
             }
@@ -1993,12 +2025,23 @@ private:
         player.vulnerable = 0;
         playerStrengthPerTurn = 0;
         playerEnergyPerTurn = 0;
+        rampageDamageBonus = 0;
+        blockPersists = false;
+        darkEmbraceActive = false;
 
         enemyIntentIndex = 0;
 
         const EnemyDef& def = enemySequence[currentEnemyIndex];
-        enemy.maxHp = def.maxHp;
-        enemy.hp = def.maxHp;
+        int baseHp = def.maxHp;
+        if (def.boss) {
+            baseHp = static_cast<int>(baseHp * 1.6f);
+        }
+        if (currentFloor >= 5) {
+            const int floorBonus = (currentFloor - 4) * 5;
+            baseHp += floorBonus;
+        }
+        enemy.maxHp = baseHp;
+        enemy.hp = baseHp;
         enemy.block = 0;
         enemy.strength = 0;
         enemy.weak = 0;
@@ -2021,7 +2064,9 @@ private:
     }
 
     void startPlayerTurn() {
-        player.block = 0;
+        if (!blockPersists) {
+            player.block = 0;
+        }
         playerEnergy = turnStartEnergy(playerEnergyPerTurn);
         const int energyBonus = relicTurnStartEnergyBonus(battleTurnCount, hasRelic(RelicType::EmberCharm));
         if (energyBonus > 0) {
@@ -2056,6 +2101,11 @@ private:
         if (card.loseHp > 0) {
             player.hp = std::max(0, player.hp - card.loseHp);
             pushLog(card.name + " 使你失去 " + std::to_string(card.loseHp) + " 点生命");
+            if (tearActive) {
+                player.strength += 1;
+                pushLog("撕裂触发：获得1点力量");
+                spawnFloatingText("+1 力量", sf::Vector2f(290.f, 108.f), sf::Color(255, 200, 100), 0.8f);
+            }
         }
 
         if (card.draw > 0) {
@@ -2129,11 +2179,97 @@ private:
             player.strength *= 2;
         }
 
+        if (baseCardId(cardId) == 17) {
+            rampageDamageBonus += 8;
+            pushLog("暴走伤害递增 +" + std::to_string(rampageDamageBonus));
+        }
+
+        if (baseCardId(cardId) == 19) {
+            blockPersists = true;
+            pushLog("壁垒生效：格挡将在回合结束后保留");
+        }
+
+        if (baseCardId(cardId) == 29) {
+            const Intent intent = currentEnemyIntent();
+            if (intent.damage > 0) {
+                drawCards(3);
+                pushLog("战斗专注：敌人攻击意图触发，抽3张牌");
+            }
+        }
+
+        if (baseCardId(cardId) == 41) {
+            int exhaustedCount = 0;
+            int blockGain = 0;
+            for (int i = static_cast<int>(hand.size()) - 1; i >= 0; --i) {
+                const CardDef* handCard = findCard(hand[i]);
+                if (handCard && handCard->type != CardType::Attack) {
+                    exhaustPile.push_back(hand[i]);
+                    hand.erase(hand.begin() + i);
+                    exhaustedCount++;
+                    blockGain += 7;
+                }
+            }
+            if (blockGain > 0) {
+                player.block += blockGain;
+                pushLog("重振精神：消耗 " + std::to_string(exhaustedCount) + " 张非攻击牌，获得 " + std::to_string(blockGain) + " 点格挡");
+                spawnFloatingText("+" + std::to_string(blockGain) + " 格挡", sf::Vector2f(260.f, 142.f), sf::Color(120, 210, 255), 0.8f);
+            }
+        }
+
+        if (baseCardId(cardId) == 42) {
+            int exhaustedCount = 0;
+            int totalDmg = 0;
+            for (int i = static_cast<int>(hand.size()) - 1; i >= 0; --i) {
+                const CardDef* handCard = findCard(hand[i]);
+                if (handCard && handCard->type == CardType::Attack) {
+                    exhaustPile.push_back(hand[i]);
+                    hand.erase(hand.begin() + i);
+                    exhaustedCount++;
+                    totalDmg += 7;
+                }
+            }
+            if (totalDmg > 0 && enemy.hp > 0) {
+                const int dmg = adjustedDamage(totalDmg, player, enemy);
+                dealDamage(enemy, dmg, false);
+                pushLog("战鼓：消耗 " + std::to_string(exhaustedCount) + " 张攻击牌，造成 " + std::to_string(dmg) + " 点伤害");
+            }
+        }
+
+        if (baseCardId(cardId) == 43) {
+            darkEmbraceActive = true;
+            pushLog("黑暗之拥生效：每次消耗卡牌时抽一张牌");
+        }
+
+        if (baseCardId(cardId) == 45) {
+            int blockDmg = player.block;
+            if (blockDmg > 0 && enemy.hp > 0) {
+                const int dmg = adjustedDamage(blockDmg, player, enemy);
+                dealDamage(enemy, dmg, false);
+                totalDamageDealt += dmg;
+                pushLog("全身撞击造成 " + std::to_string(dmg) + " 点伤害");
+            }
+        }
+
+        if (baseCardId(cardId) == 46) {
+            player.block *= 2;
+            pushLog("巩固：格挡翻倍至 " + std::to_string(player.block));
+            spawnFloatingText("格挡x2", sf::Vector2f(260.f, 142.f), sf::Color(120, 210, 255), 0.8f);
+        }
+
+        if (baseCardId(cardId) == 48) {
+            tearActive = true;
+            pushLog("撕裂生效：每次失去生命时获得1点力量");
+        }
+
         applyCardPersistentGrowthEffects(*c);
 
         if (c->damage > 0 && enemy.hp > 0) {
             for (int i = 0; i < c->hits; ++i) {
-                const int dmg = adjustedDamage(c->damage, player, enemy);
+                int baseDmg = c->damage;
+                if (baseCardId(cardId) == 17) {
+                    baseDmg += rampageDamageBonus;
+                }
+                const int dmg = adjustedDamage(baseDmg, player, enemy);
                 dealDamage(enemy, dmg, false);
                 totalDamageDealt += dmg;
                 pushLog(c->name + " 造成 " + std::to_string(dmg) + " 点伤害");
@@ -2184,6 +2320,10 @@ private:
         hand.erase(hand.begin() + handIndex);
         if (c->exhaust) {
             exhaustPile.push_back(cardId);
+            if (darkEmbraceActive) {
+                drawCards(1);
+                pushLog("黑暗之拥触发：抽1张牌");
+            }
         } else {
             discardPile.push_back(cardId);
         }
@@ -2233,9 +2373,15 @@ private:
 
         rewardChoices.clear();
         std::uniform_int_distribution<int> dist(0, static_cast<int>(cardPool.size()) - 1);
-        while (rewardChoices.size() < 3) {
+        const bool isElite = def && def->elite;
+        const int rewardCount = isElite ? 6 : 3;
+        while (rewardChoices.size() < rewardCount) {
             int id = cardPool[dist(rng)].id;
             if (id == 1 || id == 2) {
+                continue;
+            }
+            const CardDef* card = findCard(id);
+            if (card && card->eventOnly) {
                 continue;
             }
             if (std::find(rewardChoices.begin(), rewardChoices.end(), id) == rewardChoices.end()) {
@@ -2330,8 +2476,12 @@ private:
         }
 
         if (intent.damage > 0) {
+            int floorDamageBonus = 0;
+            if (currentFloor >= 5) {
+                floorDamageBonus = (currentFloor - 4);
+            }
             for (int i = 0; i < intent.hits; ++i) {
-                const int dmg = adjustedDamage(intent.damage, enemy, player);
+                const int dmg = adjustedDamage(intent.damage + floorDamageBonus, enemy, player);
                 dealDamage(player, dmg, true);
                 pushLog("敌人造成 " + std::to_string(dmg) + " 点伤害");
                 if (hasRelic(RelicType::ThornEmblem) && enemy.hp > 0) {
@@ -2420,6 +2570,8 @@ private:
         for (int i = 0; i < 3; ++i) {
             rects.emplace_back(startX + i * (cardW + gap), y, cardW, cardH);
         }
+        rects.emplace_back(440.f, 540.f, 160.f, 50.f);
+        rects.emplace_back(680.f, 540.f, 160.f, 50.f);
         return rects;
     }
 
@@ -2469,6 +2621,16 @@ private:
     }
 
     void pickReward(int index) {
+        if (index == 4) {
+            activePileOverlay = PileOverlayType::Deck;
+            return;
+        }
+        if (index == 3 || (rewardChoices.size() > 3 && index == 7)) {
+            pushLog("跳过卡牌奖励");
+            eliteRewardPicksRemaining = 0;
+            goNextFloor();
+            return;
+        }
         if (index < 0 || index >= static_cast<int>(rewardChoices.size())) {
             return;
         }
@@ -2479,6 +2641,18 @@ private:
             pushLog("获得卡牌：" + pickedCard->name);
         } else {
             pushLog("获得卡牌：未知卡牌");
+        }
+        rewardChoices.erase(rewardChoices.begin() + index);
+
+        const EnemyDef* def = nullptr;
+        if (currentEnemyIndex >= 0 && currentEnemyIndex < static_cast<int>(enemySequence.size())) {
+            def = &enemySequence[currentEnemyIndex];
+        }
+        const bool isElite = def && def->elite;
+        if (isElite && eliteRewardPicksRemaining > 0) {
+            eliteRewardPicksRemaining--;
+            pushLog("精英奖励：还需选择 " + std::to_string(eliteRewardPicksRemaining) + " 张卡牌");
+            return;
         }
 
         goNextFloor();
@@ -2521,12 +2695,20 @@ private:
 
         const sf::Vector2f mouse(static_cast<float>(event.mouseButton.x), static_cast<float>(event.mouseButton.y));
 
+        if (bgmToggleRect.contains(mouse)) {
+            playSfx(sfxUiClickBuf, 50.f);
+            toggleBgm();
+            return;
+        }
+
         if (phase == Phase::MainMenu) {
             if (menuStartRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 resetRun();
                 return;
             }
             if (menuExitRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 window.close();
                 return;
             }
@@ -2613,6 +2795,7 @@ private:
             }
 
             if (endTurnRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 endPlayerTurn();
                 return;
             }
@@ -2620,20 +2803,30 @@ private:
             auto rects = handRects();
             for (size_t i = 0; i < rects.size(); ++i) {
                 if (rects[i].contains(mouse)) {
+                    playSfx(sfxUiClickBuf, 40.f);
                     beginCardPlay(static_cast<int>(i));
                     return;
                 }
             }
         } else if (phase == Phase::Reward) {
+            if (activePileOverlay != PileOverlayType::None) {
+                if (pileOverlayCloseRect.contains(mouse)) {
+                    activePileOverlay = PileOverlayType::None;
+                    return;
+                }
+                return;
+            }
             auto rects = rewardRects();
             for (size_t i = 0; i < rects.size(); ++i) {
                 if (rects[i].contains(mouse)) {
+                    playSfx(sfxUiClickBuf, 50.f);
                     pickReward(static_cast<int>(i));
                     return;
                 }
             }
         } else if (phase == Phase::Campfire) {
             if (campRestRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 if (campfireDidAction) {
                     pushLog("本层营火已使用");
                     showActionHint("本层营火已使用", sf::Color(255, 210, 170));
@@ -2648,6 +2841,7 @@ private:
                 return;
             }
             if (campForgeRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 if (campfireDidAction) {
                     pushLog("本层营火已使用");
                     showActionHint("本层营火已使用", sf::Color(255, 210, 170));
@@ -2659,14 +2853,17 @@ private:
             }
         } else if (phase == Phase::Shop) {
             if (shopLeaveRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 goNextFloor();
                 return;
             }
             if (shopPotionRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 tryBuyPotionCapacity();
                 return;
             }
             if (shopRemoveRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 tryBuyRemoveService();
                 return;
             }
@@ -2674,21 +2871,25 @@ private:
             auto rects = shopCardRects();
             for (size_t i = 0; i < rects.size() && i < shopChoices.size(); ++i) {
                 if (rects[i].contains(mouse)) {
+                    playSfx(sfxUiClickBuf, 50.f);
                     tryBuyShopCard(static_cast<int>(i));
                     return;
                 }
             }
         } else if (phase == Phase::Event) {
             if (eventLeftRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 resolveEventChoice(0);
                 return;
             }
             if (eventRightRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 resolveEventChoice(1);
                 return;
             }
         } else if (phase == Phase::DeckEdit) {
             if (deckDoneRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
                 if (deckEditRemaining > 0) {
                     pushLog("还需要选择 " + std::to_string(deckEditRemaining) + " 张卡牌");
                     showActionHint("仍需选择 " + std::to_string(deckEditRemaining) + " 张", sf::Color(255, 220, 160));
@@ -2799,12 +3000,6 @@ private:
                 transitionTo(Phase::Credits, "感谢页自动过渡");
                 phaseTimer = 0.0f;
             }
-        } else if (phase == Phase::Credits) {
-            phaseTimer += dt;
-            if (phaseTimer >= 8.0f) {
-                transitionTo(Phase::MainMenu, "制作人名单自动返回主菜单");
-                phaseTimer = 0.0f;
-            }
         }
     }
 
@@ -2817,6 +3012,22 @@ private:
         t.setString(text);
         t.setCharacterSize(size);
         t.setFillColor(color);
+        t.setPosition(x, y);
+        window.draw(t);
+    }
+
+    void drawTextCentered(const std::string& text, float y, unsigned int size, sf::Color color) {
+        if (!hasFont) {
+            return;
+        }
+        sf::Text t;
+        t.setFont(font);
+        const sf::String utfText = sf::String::fromUtf8(text.begin(), text.end());
+        t.setString(utfText);
+        t.setCharacterSize(size);
+        t.setFillColor(color);
+        const float textWidth = t.getLocalBounds().width;
+        const float x = (1280.f - textWidth) / 2.f;
         t.setPosition(x, y);
         window.draw(t);
     }
@@ -3047,9 +3258,9 @@ private:
 
     sf::Color cardTitleColorWithUpgrade(int cardId) const {
         if (isUpgradedCard(cardId)) {
-            return sf::Color(172, 255, 164);
+            return sf::Color(255, 255, 140);
         }
-        return sf::Color::White;
+        return sf::Color(255, 255, 230);
     }
 
     sf::Color cardMetaColorWithUpgrade(int cardId) const {
@@ -3308,9 +3519,12 @@ private:
         } else if (activePileOverlay == PileOverlayType::Discard) {
             source = &discardPile;
             title = "弃牌堆";
-        } else {
+        } else if (activePileOverlay == PileOverlayType::Exhaust) {
             source = &exhaustPile;
             title = "消耗堆";
+        } else {
+            source = &masterDeck;
+            title = "牌组";
         }
 
         sf::RectangleShape curtain(sf::Vector2f(1280.f, 720.f));
@@ -3459,8 +3673,8 @@ private:
             card.setOutlineColor(sf::Color::Black);
             window.draw(card);
 
-            drawText(c->name, rects[i].left + 6.f, rects[i].top + 8.f - hoverLift, 16, cardTitleColorWithUpgrade(hand[i]));
-            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 30.f - hoverLift, 14, cardMetaColorWithUpgrade(hand[i]));
+            drawText(c->name, rects[i].left + 6.f, rects[i].top + 6.f - hoverLift, 18, cardTitleColorWithUpgrade(hand[i]));
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 32.f - hoverLift, 14, cardMetaColorWithUpgrade(hand[i]));
             drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 56.f, rects[i].top + 6.f - hoverLift, 30.f, 30.f));
             drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 55.f - hoverLift, 13, sf::Color(240, 240, 240), 7);
         }
@@ -3550,7 +3764,7 @@ private:
         drawText("第 " + std::to_string(currentFloor + 1) + " 层战斗已完成", 500.f, 130.f, 24, sf::Color(220, 220, 220));
 
         auto rects = rewardRects();
-        for (size_t i = 0; i < rewardChoices.size() && i < rects.size(); ++i) {
+        for (size_t i = 0; i < rewardChoices.size() && i < 3; ++i) {
             const CardDef* c = findCard(rewardChoices[i]);
             if (!c) {
                 continue;
@@ -3563,13 +3777,19 @@ private:
             card.setOutlineColor(sf::Color::Black);
             window.draw(card);
 
-            drawText(c->name, rects[i].left + 10.f, rects[i].top + 12.f, 22, cardTitleColorWithUpgrade(rewardChoices[i]));
-            drawText("费用：" + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 48.f, 18, cardMetaColorWithUpgrade(rewardChoices[i]));
+            drawText(c->name, rects[i].left + 10.f, rects[i].top + 10.f, 26, cardTitleColorWithUpgrade(rewardChoices[i]));
+            drawText("费用：" + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 50.f, 18, cardMetaColorWithUpgrade(rewardChoices[i]));
             drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 166.f, rects[i].top + 10.f, 42.f, 42.f));
             drawWrappedText(c->desc, rects[i].left + 10.f, rects[i].top + 82.f, 16, sf::Color(240, 240, 240), 11);
         }
 
-        drawText("点击任意一张卡牌继续", 500.f, 640.f, 24, sf::Color(230, 230, 230));
+        drawButton(rects[3], "跳过", sf::Color(80, 80, 80, 230));
+        drawButton(rects[4], "查看牌组", sf::Color(56, 94, 126, 230));
+        drawText("点击卡牌选择或跳过", 500.f, 620.f, 24, sf::Color(230, 230, 230));
+
+        if (activePileOverlay != PileOverlayType::None) {
+            renderPileOverlay();
+        }
     }
 
     void renderCampfire() {
@@ -3605,8 +3825,8 @@ private:
                 continue;
             }
 
-            drawText(c->name, rects[i].left + 10.f, rects[i].top + 8.f, 22, cardTitleColorWithUpgrade(shopChoices[i]));
-            drawText("费 " + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 40.f, 18, cardMetaColorWithUpgrade(shopChoices[i]));
+            drawText(c->name, rects[i].left + 10.f, rects[i].top + 6.f, 24, cardTitleColorWithUpgrade(shopChoices[i]));
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 38.f, 18, cardMetaColorWithUpgrade(shopChoices[i]));
             const int price = cardPrice(c->id);
             const sf::Color priceColor = (gold >= price) ? sf::Color(255, 220, 150) : sf::Color(255, 140, 140);
             drawText("价格 " + std::to_string(price), rects[i].left + 10.f, rects[i].top + 66.f, 18, priceColor);
@@ -3623,17 +3843,17 @@ private:
         if (currentEventId == 1) {
             drawText("事件：生锈刀刃", 450.f, 80.f, 54, sf::Color(250, 210, 170));
             drawWrappedText("你在前方看见了一座荒废神殿。祭坛上有一把生锈匕首，似乎在渴望鲜血。", 170.f, 180.f, 28, sf::Color(235, 235, 235), 28);
-            drawButton(eventLeftRect, "失去10生命，获得 邪恶之刃", sf::Color(130, 72, 72, 240));
-            drawButton(eventRightRect, "无视匕首，拿走80金币", sf::Color(92, 118, 72, 240));
-            drawText("选项影响：左-10生命，右+80金币", 410.f, 650.f, 22, sf::Color(230, 220, 190));
+            drawButton(eventLeftRect, "失去16生命，获得 邪恶之刃", sf::Color(130, 72, 72, 240));
+            drawButton(eventRightRect, "无视匕首，拿走180金币", sf::Color(92, 118, 72, 240));
+            drawText("选项影响：左-16生命，右+180金币", 410.f, 650.f, 22, sf::Color(230, 220, 190));
             return;
         }
 
         drawText("事件：救与不救", 470.f, 80.f, 54, sf::Color(250, 210, 170));
         drawWrappedText("一位看上去需要帮助的老人挡在路中央。你该如何选择？", 220.f, 190.f, 30, sf::Color(235, 235, 235), 24);
-        drawButton(eventLeftRect, "施以援手，损失12生命", sf::Color(130, 72, 72, 240));
+        drawButton(eventLeftRect, "施以援手，获得一件遗物", sf::Color(130, 100, 72, 240));
         drawButton(eventRightRect, "绕路找到剪刀，移除2张卡", sf::Color(92, 118, 72, 240));
-        drawText("选项影响：左-12生命，右移除2张卡", 408.f, 650.f, 22, sf::Color(230, 220, 190));
+        drawText("选项影响：左+遗物，右移除2张卡", 408.f, 650.f, 22, sf::Color(230, 220, 190));
     }
 
     void renderDeckEdit() {
@@ -3687,6 +3907,16 @@ private:
         drawText("累计通关：" + std::to_string(totalWins), 20.f, 680.f, 20, sf::Color(220, 220, 180));
     }
 
+    void renderBgmToggle() {
+        sf::RectangleShape btn(sf::Vector2f(bgmToggleRect.width, bgmToggleRect.height));
+        btn.setPosition(bgmToggleRect.left, bgmToggleRect.top);
+        btn.setFillColor(bgmEnabled ? sf::Color(56, 94, 126, 220) : sf::Color(80, 60, 60, 220));
+        btn.setOutlineThickness(2.f);
+        btn.setOutlineColor(sf::Color(0, 0, 0, 180));
+        window.draw(btn);
+        drawText(bgmEnabled ? "BGM开" : "BGM关", bgmToggleRect.left + 8.f, bgmToggleRect.top + 8.f, 18, sf::Color::White);
+    }
+
     void renderDefeat() {
         drawText("战败", 560.f, 200.f, 84, sf::Color(240, 120, 120));
         drawText("本次挑战未能击败 BOSS", 430.f, 320.f, 34, sf::Color(230, 230, 230));
@@ -3701,11 +3931,11 @@ private:
     }
 
     void renderCredits() {
-        drawText("制作人名单", 510.f, 90.f, 62, sf::Color(250, 230, 170));
-        drawText("[占位] 策划：待补充", 430.f, 230.f, 34, sf::Color(235, 235, 235));
-        drawText("[占位] 程序：待补充", 430.f, 290.f, 34, sf::Color(235, 235, 235));
-        drawText("[占位] 美术：待补充", 430.f, 350.f, 34, sf::Color(235, 235, 235));
-        drawText("[占位] 音频：待补充", 430.f, 410.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("制作人名单", 90.f, 62, sf::Color(250, 230, 170));
+        drawTextCentered("策划：杨立鑫", 230.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("程序：杨立鑫", 290.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("美术：宋金林", 350.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("音频：宋金林", 410.f, 34, sf::Color(235, 235, 235));
         drawButton(backMenuRect, "返回主菜单", sf::Color(86, 102, 145, 240));
     }
 
@@ -3799,6 +4029,7 @@ private:
             renderDefeat();
         }
 
+        renderBgmToggle();
         renderActionHint();
 
         window.display();
