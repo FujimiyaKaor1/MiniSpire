@@ -1,5 +1,20 @@
 ﻿#include <SFML/Graphics.hpp>
 
+// SFML Audio is optional - gracefully degrades when unavailable
+#ifndef USE_AUDIO
+#define USE_AUDIO 0
+#endif
+
+#if USE_AUDIO
+#include <SFML/Audio.hpp>
+#endif
+
+#if USE_AUDIO
+using SfxBuffer = sf::SoundBuffer;
+#else
+struct SfxBuffer {};
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -8,6 +23,7 @@
 #include <deque>
 #include <fstream>
 #include <iostream>
+#include <filesystem>
 #include <random>
 #include <sstream>
 #include <stdexcept>
@@ -484,6 +500,7 @@ private:
     sf::RenderWindow window;
     sf::Font font;
     bool hasFont = false;
+    std::string loadedFontPath;
 
     sf::Texture cardAttackTex;
     sf::Texture cardSkillTex;
@@ -491,6 +508,10 @@ private:
     sf::Texture enemy1Tex;
     sf::Texture enemy2Tex;
     sf::Texture enemy3Tex;
+    sf::Texture enemy4Tex;
+    sf::Texture elite1Tex;
+    sf::Texture elite2Tex;
+    sf::Texture elite3Tex;
     sf::Texture eliteTex;
     sf::Texture bossTex;
     sf::Texture logoTex;
@@ -502,6 +523,34 @@ private:
     sf::Texture uiPotionTex;
     sf::Texture uiDeckTex;
     sf::Texture uiRelicTex;
+    sf::Texture statHpTex;
+    sf::Texture statEnergyTex;
+    sf::Texture statBlockTex;
+    sf::Texture statStrengthTex;
+
+    sf::Texture bgMainMenu;
+    sf::Texture bgBattle;
+    sf::Texture bgCampfire;
+    sf::Texture bgShop;
+    sf::Texture bgEvent;
+    sf::Texture bgDefeat;
+    sf::Texture bgVictory;
+
+    std::string currentBgmPath;
+    SfxBuffer sfxSwordBuf;
+    SfxBuffer sfxPlayerHitBuf;
+    SfxBuffer sfxEnemyHitBuf;
+    SfxBuffer sfxCardPlayBuf;
+    SfxBuffer sfxBlockBuf;
+    SfxBuffer sfxHealBuf;
+    SfxBuffer sfxDefeatBuf;
+    SfxBuffer sfxVictoryBuf;
+    float sfxCooldown = 0.0f;
+
+#if USE_AUDIO
+    sf::Music bgmPlayer;
+    sf::Sound sfxPlayer;
+#endif
 
     std::mt19937 rng;
 
@@ -724,14 +773,43 @@ private:
             return;
         }
         phase = to;
+        if (to == Phase::Defeat) {
+            playSfx(sfxDefeatBuf, 70.f);
+        } else if (to == Phase::VictoryThanks) {
+            playSfx(sfxVictoryBuf, 70.f);
+        }
     }
 
     void loadFont() {
-        hasFont = font.loadFromFile("assets/fonts/NotoSansCJKsc-Regular.otf") ||
-                  font.loadFromFile("assets/font.ttf") ||
-                  font.loadFromFile("C:/Windows/Fonts/arial.ttf");
+        const std::vector<std::string> candidates = {
+            // Game-style CJK fonts (if user places them in assets/fonts)
+            "assets/fonts/ZCOOLKuaiLe-Regular.ttf",
+            "assets/fonts/ZCOOLQingKeHuangYou-Regular.ttf",
+            "assets/fonts/SmileySans-Oblique.ttf",
+            // Stable bundled fallback
+            "assets/fonts/NotoSansCJKsc-Regular.otf",
+            // Legacy/local fallback
+            "assets/font.ttf",
+            // Windows CJK/system fallbacks
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simhei.ttf",
+            "C:/Windows/Fonts/arial.ttf"
+        };
+
+        hasFont = false;
+        loadedFontPath.clear();
+        for (const auto& path : candidates) {
+            if (font.loadFromFile(path)) {
+                hasFont = true;
+                loadedFontPath = path;
+                break;
+            }
+        }
+
         if (!hasFont) {
             std::cerr << "[warn] 字体加载失败，文本将无法显示" << '\n';
+        } else {
+            std::cerr << "[info] 字体加载成功: " << loadedFontPath << '\n';
         }
     }
 
@@ -764,6 +842,10 @@ private:
         loadTexture(enemy1Tex, "assets/images/enemies/enemy1.png");
         loadTexture(enemy2Tex, "assets/images/enemies/enemy2.png");
         loadTexture(enemy3Tex, "assets/images/enemies/enemy3.png");
+        loadTexture(enemy4Tex, "assets/images/enemies/enemy4.png");
+        loadTexture(elite1Tex, "assets/images/enemies/elite1.png");
+        loadTexture(elite2Tex, "assets/images/enemies/elite2.png");
+        loadTexture(elite3Tex, "assets/images/enemies/elite3.png");
         loadTexture(eliteTex, "assets/images/enemies/elite.png");
         loadTexture(bossTex, "assets/images/enemies/boss.png");
 
@@ -776,7 +858,82 @@ private:
         loadTexture(uiPotionTex, "assets/images/ui/stat_potion.png");
         loadTexture(uiDeckTex, "assets/images/ui/stat_deck.png");
         loadTexture(uiRelicTex, "assets/images/ui/stat_relic.png");
+        loadTexture(statHpTex, "assets/images/ui/stat_hp.png");
+        loadTexture(statEnergyTex, "assets/images/ui/stat_energy.png");
+        loadTexture(statBlockTex, "assets/images/ui/stat_block.png");
+        loadTexture(statStrengthTex, "assets/images/ui/stat_strength.png");
+
+        loadTexture(bgMainMenu, "assets/images/backgrounds/main_menu.png");
+        loadTexture(bgBattle, "assets/images/backgrounds/battle.png");
+        loadTexture(bgCampfire, "assets/images/backgrounds/campfire.png");
+        loadTexture(bgShop, "assets/images/backgrounds/shop.png");
+        loadTexture(bgEvent, "assets/images/backgrounds/event.png");
+        loadTexture(bgDefeat, "assets/images/backgrounds/defeat.png");
+        loadTexture(bgVictory, "assets/images/backgrounds/victory.png");
+
+#if USE_AUDIO
+        loadSfxBuffer(sfxSwordBuf, "assets/audio/sfx/sword_attack.mp3");
+        loadSfxBuffer(sfxPlayerHitBuf, "assets/audio/sfx/player_hit.mp3");
+        loadSfxBuffer(sfxEnemyHitBuf, "assets/audio/sfx/enemy_hit.mp3");
+        loadSfxBuffer(sfxCardPlayBuf, "assets/audio/sfx/card_play.mp3");
+        loadSfxBuffer(sfxBlockBuf, "assets/audio/sfx/block.mp3");
+        loadSfxBuffer(sfxHealBuf, "assets/audio/sfx/heal.mp3");
+        loadSfxBuffer(sfxDefeatBuf, "assets/audio/sfx/defeat.mp3");
+        loadSfxBuffer(sfxVictoryBuf, "assets/audio/sfx/victory.mp3");
+#endif
     }
+
+#if USE_AUDIO
+    void loadSfxBuffer(SfxBuffer& buf, const std::string& path) {
+        if (!buf.loadFromFile(path)) {
+            std::cerr << "[warn] 音效加载失败: " << path << '\n';
+        }
+    }
+
+    std::string resolveBgmPath(const std::string& preferredPath) const {
+        namespace fs = std::filesystem;
+        if (fs::exists(preferredPath)) {
+            return preferredPath;
+        }
+        if (preferredPath.size() > 4 && preferredPath.substr(preferredPath.size() - 4) == ".mp3") {
+            const std::string wavFallback = preferredPath.substr(0, preferredPath.size() - 4) + ".wav";
+            if (fs::exists(wavFallback)) {
+                return wavFallback;
+            }
+        }
+        return preferredPath;
+    }
+
+    void playBgm(const std::string& bgmPath) {
+        const std::string resolvedPath = resolveBgmPath(bgmPath);
+        if (resolvedPath == currentBgmPath && bgmPlayer.getStatus() == sf::Music::Playing) return;
+        currentBgmPath = resolvedPath;
+        if (bgmPlayer.openFromFile(resolvedPath)) {
+            bgmPlayer.setLoop(true);
+            bgmPlayer.setVolume(40.f);
+            bgmPlayer.play();
+        } else {
+            std::cerr << "[warn] BGM加载失败: " << bgmPath << '\n';
+        }
+    }
+
+    void stopBgm() {
+        bgmPlayer.stop();
+        currentBgmPath.clear();
+    }
+
+    void playSfx(const SfxBuffer& buf, float volume = 60.f) {
+        if (sfxCooldown > 0.0f) return;
+        sfxPlayer.setBuffer(buf);
+        sfxPlayer.setVolume(volume);
+        sfxPlayer.play();
+        sfxCooldown = 0.05f;
+    }
+#else
+    void playBgm(const std::string& bgmPath) { currentBgmPath = bgmPath; }
+    void stopBgm() { currentBgmPath.clear(); }
+    void playSfx(const SfxBuffer&, float = 60.f) {}
+#endif
 
     void pushLog(const std::string& line) {
         logs.push_back(line);
@@ -1748,6 +1905,7 @@ private:
             return;
         }
         if (!enableCombatAnimations) {
+            playSfx(sfxCardPlayBuf, 40.f);
             applyCard(handIndex);
             return;
         }
@@ -1929,9 +2087,11 @@ private:
         if (targetIsPlayer) {
             playerHitFlashTimer = 0.22f;
             spawnFloatingText("-" + std::to_string(damage), sf::Vector2f(275.f, 122.f), sf::Color(255, 120, 120), 0.65f);
+            playSfx(sfxPlayerHitBuf, 50.f);
         } else {
             enemyHitFlashTimer = 0.22f;
             spawnFloatingText("-" + std::to_string(damage), sf::Vector2f(620.f, 238.f), sf::Color(255, 210, 120), 0.65f);
+            playSfx(sfxSwordBuf, 50.f);
         }
     }
 
@@ -1981,6 +2141,7 @@ private:
             if (healed > 0) {
                 pushLog(c->name + " 回复 " + std::to_string(healed) + " 点生命");
                 spawnFloatingText("+" + std::to_string(healed) + " 生命", sf::Vector2f(260.f, 98.f), sf::Color(120, 255, 140), 0.9f);
+                playSfx(sfxHealBuf, 40.f);
             }
         }
 
@@ -1988,6 +2149,7 @@ private:
             player.block += c->block;
             pushLog(c->name + " 提供 " + std::to_string(c->block) + " 点格挡");
             spawnFloatingText("+" + std::to_string(c->block) + " 格挡", sf::Vector2f(260.f, 142.f), sf::Color(120, 210, 255), 0.8f);
+            if (c->block > 0) playSfx(sfxBlockBuf, 40.f);
         }
 
         if (c->gainStrength > 0) {
@@ -2569,6 +2731,7 @@ private:
         turnBannerTimer = std::max(0.0f, turnBannerTimer - dt);
         actionHintTimer = std::max(0.0f, actionHintTimer - dt);
         battleQuoteTimer = std::max(0.0f, battleQuoteTimer - dt);
+        sfxCooldown = std::max(0.0f, sfxCooldown - dt);
 
         for (auto it = floatingTexts.begin(); it != floatingTexts.end();) {
             it->remaining = std::max(0.0f, it->remaining - dt);
@@ -2585,6 +2748,7 @@ private:
             if (pendingCard.elapsed >= pendingCard.duration) {
                 const int toResolve = pendingCard.handIndex;
                 pendingCard.active = false;
+                playSfx(sfxCardPlayBuf, 40.f);
                 applyCard(toResolve);
             }
         }
@@ -2828,11 +2992,17 @@ private:
         if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             return &enemy1Tex;
         }
-        if (currentEnemyIndex <= 0) return &enemy1Tex;
-        if (currentEnemyIndex <= 1) return &enemy2Tex;
-        if (currentEnemyIndex <= 3) return &enemy3Tex;
-        if (currentEnemyIndex <= 6) return &eliteTex;
-        return &bossTex;
+        switch (currentEnemyIndex) {
+            case 0: return &enemy1Tex; // 黏液斗士
+            case 1: return &enemy2Tex; // 邪教徒
+            case 2: return &enemy3Tex; // 寄生突袭者
+            case 3: return &enemy4Tex; // 刀盾卫兵
+            case 4: return &elite1Tex; // 装甲骑士
+            case 5: return &elite2Tex; // 鲜血斗士
+            case 6: return &elite3Tex; // 诅咒祭司
+            case 7: return &bossTex;   // 尖塔守卫
+            default: return &enemy1Tex;
+        }
     }
 
     sf::FloatRect enemyPortraitRect() const {
@@ -2851,6 +3021,38 @@ private:
             case CardType::Skill: return sf::Color(80, 130, 190);
             case CardType::Power: return sf::Color(190, 160, 70);
             default: return sf::Color(140, 140, 140);
+        }
+    }
+
+    sf::Color cardColorWithUpgrade(CardType type, int cardId) const {
+        if (isUpgradedCard(cardId)) {
+            switch (type) {
+                case CardType::Attack: return sf::Color(60, 170, 80);
+                case CardType::Skill: return sf::Color(50, 160, 100);
+                case CardType::Power: return sf::Color(80, 180, 90);
+                default: return sf::Color(60, 160, 70);
+            }
+        }
+        return cardColor(type);
+    }
+
+    sf::Color cardTitleColorWithUpgrade(int cardId) const {
+        if (isUpgradedCard(cardId)) {
+            return sf::Color(172, 255, 164);
+        }
+        return sf::Color::White;
+    }
+
+    sf::Color cardMetaColorWithUpgrade(int cardId) const {
+        if (isUpgradedCard(cardId)) {
+            return sf::Color(210, 255, 200);
+        }
+        return sf::Color(230, 230, 230);
+    }
+
+    void drawBackground(const sf::Texture& tex) {
+        if (isTextureSizeAvailable(tex.getSize())) {
+            drawTextureFit(tex, sf::FloatRect(0.f, 0.f, 1280.f, 720.f));
         }
     }
 
@@ -2919,8 +3121,10 @@ private:
         std::ostringstream p;
         p << "玩家 " << player.hp << "/" << player.maxHp << "  格挡 " << player.block << "  力量 " << player.strength
           << "  虚弱 " << player.weak << "  易伤 " << player.vulnerable;
-        drawText(p.str(), 32.f, 60.f, 20, sf::Color(210, 238, 210));
-        drawText("能量 " + std::to_string(playerEnergy), 32.f, 86.f, 24, sf::Color(255, 236, 160));
+        drawTextureFit(statHpTex, sf::FloatRect(32.f, 62.f, 16.f, 16.f));
+        drawText(p.str(), 52.f, 60.f, 20, sf::Color(210, 238, 210));
+        drawTextureFit(statEnergyTex, sf::FloatRect(32.f, 88.f, 16.f, 16.f));
+        drawText("能量 " + std::to_string(playerEnergy), 52.f, 86.f, 24, sf::Color(255, 236, 160));
 
         sf::RectangleShape runStats(sf::Vector2f(runStatsRect.width, runStatsRect.height));
         runStats.setPosition(runStatsRect.left, runStatsRect.top);
@@ -3241,13 +3445,13 @@ private:
             const float hoverLift = (static_cast<int>(i) == hoveredCardIndex) ? 12.f : 0.f;
             sf::RectangleShape card(sf::Vector2f(rects[i].width, rects[i].height));
             card.setPosition(rects[i].left, rects[i].top - hoverLift);
-            card.setFillColor(cardColor(c->type));
+            card.setFillColor(cardColorWithUpgrade(c->type, hand[i]));
             card.setOutlineThickness(2.f);
             card.setOutlineColor(sf::Color::Black);
             window.draw(card);
 
-            drawText(c->name, rects[i].left + 6.f, rects[i].top + 8.f - hoverLift, 16, sf::Color::White);
-            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 30.f - hoverLift, 14, sf::Color::White);
+            drawText(c->name, rects[i].left + 6.f, rects[i].top + 8.f - hoverLift, 16, cardTitleColorWithUpgrade(hand[i]));
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 30.f - hoverLift, 14, cardMetaColorWithUpgrade(hand[i]));
             drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 56.f, rects[i].top + 6.f - hoverLift, 30.f, 30.f));
             drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 55.f - hoverLift, 13, sf::Color(240, 240, 240), 7);
         }
@@ -3262,13 +3466,13 @@ private:
 
                 sf::RectangleShape card(sf::Vector2f(pendingCard.fromRect.width * scale, pendingCard.fromRect.height * scale));
                 card.setPosition(x, y);
-                card.setFillColor(cardColor(c->type));
+                card.setFillColor(cardColorWithUpgrade(c->type, pendingCard.cardId));
                 card.setOutlineThickness(2.f);
                 card.setOutlineColor(sf::Color::Black);
                 window.draw(card);
 
-                drawText(c->name, x + 6.f, y + 8.f, 16, sf::Color::White);
-                drawText("费 " + std::to_string(c->cost), x + 6.f, y + 30.f, 14, sf::Color::White);
+                drawText(c->name, x + 6.f, y + 8.f, 16, cardTitleColorWithUpgrade(pendingCard.cardId));
+                drawText("费 " + std::to_string(c->cost), x + 6.f, y + 30.f, 14, cardMetaColorWithUpgrade(pendingCard.cardId));
             }
         }
 
@@ -3345,13 +3549,13 @@ private:
 
             sf::RectangleShape card(sf::Vector2f(rects[i].width, rects[i].height));
             card.setPosition(rects[i].left, rects[i].top);
-            card.setFillColor(cardColor(c->type));
+            card.setFillColor(cardColorWithUpgrade(c->type, rewardChoices[i]));
             card.setOutlineThickness(3.f);
             card.setOutlineColor(sf::Color::Black);
             window.draw(card);
 
-            drawText(c->name, rects[i].left + 10.f, rects[i].top + 12.f, 22, sf::Color::White);
-            drawText("费用：" + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 48.f, 18, sf::Color::White);
+            drawText(c->name, rects[i].left + 10.f, rects[i].top + 12.f, 22, cardTitleColorWithUpgrade(rewardChoices[i]));
+            drawText("费用：" + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 48.f, 18, cardMetaColorWithUpgrade(rewardChoices[i]));
             drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 166.f, rects[i].top + 10.f, 42.f, 42.f));
             drawWrappedText(c->desc, rects[i].left + 10.f, rects[i].top + 82.f, 16, sf::Color(240, 240, 240), 11);
         }
@@ -3392,8 +3596,8 @@ private:
                 continue;
             }
 
-            drawText(c->name, rects[i].left + 10.f, rects[i].top + 8.f, 22, sf::Color::White);
-            drawText("费 " + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 40.f, 18, sf::Color(235, 235, 235));
+            drawText(c->name, rects[i].left + 10.f, rects[i].top + 8.f, 22, cardTitleColorWithUpgrade(shopChoices[i]));
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 10.f, rects[i].top + 40.f, 18, cardMetaColorWithUpgrade(shopChoices[i]));
             const int price = cardPrice(c->id);
             const sf::Color priceColor = (gold >= price) ? sf::Color(255, 220, 150) : sf::Color(255, 140, 140);
             drawText("价格 " + std::to_string(price), rects[i].left + 10.f, rects[i].top + 66.f, 18, priceColor);
@@ -3442,7 +3646,7 @@ private:
             sf::RectangleShape card(sf::Vector2f(rects[i].width, rects[i].height));
             card.setPosition(rects[i].left, rects[i].top);
             const CardDef* c = findCard(masterDeck[i]);
-            card.setFillColor(c ? cardColor(c->type) : sf::Color(90, 90, 90));
+            card.setFillColor(c ? cardColorWithUpgrade(c->type, masterDeck[i]) : sf::Color(90, 90, 90));
             card.setOutlineThickness(2.f);
             card.setOutlineColor(sf::Color(0, 0, 0, 190));
             window.draw(card);
@@ -3450,8 +3654,8 @@ private:
             if (!c) {
                 continue;
             }
-            drawText(c->name, rects[i].left + 6.f, rects[i].top + 6.f, 18, sf::Color::White);
-            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 32.f, 14, sf::Color(230, 230, 230));
+            drawText(c->name, rects[i].left + 6.f, rects[i].top + 6.f, 18, cardTitleColorWithUpgrade(masterDeck[i]));
+            drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 32.f, 14, cardMetaColorWithUpgrade(masterDeck[i]));
             drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 50.f, 12, sf::Color(230, 230, 230), 16);
         }
 
@@ -3499,15 +3703,35 @@ private:
     void render() {
         window.clear(sf::Color(14, 24, 30));
 
+        // Draw scene-specific background
+        if (phase == Phase::MainMenu) {
+            drawBackground(bgMainMenu);
+        } else if (phase == Phase::Battle || phase == Phase::Reward) {
+            drawBackground(bgBattle);
+        } else if (phase == Phase::Campfire) {
+            drawBackground(bgCampfire);
+        } else if (phase == Phase::Shop) {
+            drawBackground(bgShop);
+        } else if (phase == Phase::Event) {
+            drawBackground(bgEvent);
+        } else if (phase == Phase::Defeat) {
+            drawBackground(bgDefeat);
+        } else if (phase == Phase::VictoryThanks || phase == Phase::Credits) {
+            drawBackground(bgVictory);
+        } else {
+            drawBackground(bgBattle);
+        }
+
+        // Subtle overlay for text readability
         sf::VertexArray bg(sf::Quads, 4);
         bg[0].position = sf::Vector2f(0.f, 0.f);
         bg[1].position = sf::Vector2f(1280.f, 0.f);
         bg[2].position = sf::Vector2f(1280.f, 720.f);
         bg[3].position = sf::Vector2f(0.f, 720.f);
-        bg[0].color = sf::Color(24, 45, 56);
-        bg[1].color = sf::Color(50, 42, 30);
-        bg[2].color = sf::Color(18, 32, 40);
-        bg[3].color = sf::Color(15, 26, 35);
+        bg[0].color = sf::Color(14, 24, 30, 120);
+        bg[1].color = sf::Color(14, 24, 30, 120);
+        bg[2].color = sf::Color(14, 24, 30, 120);
+        bg[3].color = sf::Color(14, 24, 30, 120);
         window.draw(bg);
 
         const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(std::clock()) * 0.0018f);
@@ -3520,6 +3744,23 @@ private:
         glowB.setPosition(-120.f, 420.f);
         glowB.setFillColor(sf::Color(84, 188, 182, static_cast<sf::Uint8>(16 + pulse * 20.f)));
         window.draw(glowB);
+
+        // Play appropriate BGM
+        if (phase == Phase::MainMenu) {
+            if (currentBgmPath != "assets/audio/bgm/main_menu.mp3") playBgm("assets/audio/bgm/main_menu.mp3");
+        } else if (phase == Phase::Battle) {
+            if (currentBgmPath != "assets/audio/bgm/battle.mp3") playBgm("assets/audio/bgm/battle.mp3");
+        } else if (phase == Phase::Campfire) {
+            if (currentBgmPath != "assets/audio/bgm/campfire.mp3") playBgm("assets/audio/bgm/campfire.mp3");
+        } else if (phase == Phase::Shop) {
+            if (currentBgmPath != "assets/audio/bgm/shop.mp3") playBgm("assets/audio/bgm/shop.mp3");
+        } else if (phase == Phase::Event) {
+            if (currentBgmPath != "assets/audio/bgm/event.mp3") playBgm("assets/audio/bgm/event.mp3");
+        } else if (phase == Phase::Defeat) {
+            if (currentBgmPath != "assets/audio/bgm/defeat.mp3") playBgm("assets/audio/bgm/defeat.mp3");
+        } else if (phase == Phase::VictoryThanks || phase == Phase::Credits) {
+            if (currentBgmPath != "assets/audio/bgm/victory.mp3") playBgm("assets/audio/bgm/victory.mp3");
+        }
 
         if (phase == Phase::MainMenu) {
             renderMainMenu();

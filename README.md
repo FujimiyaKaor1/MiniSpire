@@ -18,6 +18,7 @@ Implemented scope:
 - 遗物系统：5 个遗物，精英战胜利后掉落且不重复（首回合能量、战前回血、反伤等效果）
 - 轻量动画：受击闪白、状态栏受击红闪、手牌悬停上浮、出牌短过渡动画、回合提示淡出、战斗浮动文字反馈
 - 轻量 UI 主题美化：统一了顶部状态区、敌人面板、按钮描边与背景渐变配色
+- 升级卡牌视觉强化：升级卡牌底色与文字均显示为绿色系
 
 ## Build (Windows + vcpkg recommended)
 
@@ -33,6 +34,10 @@ Implemented scope:
    - `./build/MiniSpireSFML.exe`
 5. Smoke self-test:
    - `ctest --preset default --output-on-failure`
+
+可选音频构建：
+- 默认关闭音频（更稳定，避免 Windows/MinGW 的已知 ABI 兼容问题）
+- 若要启用音频：`cmake --preset default -DENABLE_AUDIO=ON` 后重新构建
 
 ## Controls
 
@@ -59,6 +64,7 @@ Implemented scope:
 - Windows + MSVC 下默认使用 UTF-8 编译选项，中文显示更稳定。
 - Demo 视觉使用联网获取的开源素材（OpenMoji 图标 + Noto CJK 字体）。
 - If packaged fonts fail to load, the game tries `C:/Windows/Fonts/arial.ttf`.
+- 字体优先级已支持游戏风中文字体：`assets/fonts/ZCOOLKuaiLe-Regular.ttf`、`assets/fonts/ZCOOLQingKeHuangYou-Regular.ttf`、`assets/fonts/SmileySans-Oblique.ttf`；未提供时自动回退到 Noto/系统字体。
 - 本局内牌组会成长：奖励卡会进入主牌组并用于后续战斗。
 - 起始牌组已调整为 10 张（4 打击、4 防御、1 重击、1 快速检索）。
 - 平衡微调：血瓶为每战回复 5 生命；荆棘徽记反伤为 1；精英战遗物掉落为概率触发（非必掉）。
