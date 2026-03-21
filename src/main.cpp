@@ -10,14 +10,18 @@
 #include <iostream>
 #include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 enum class CardType { Attack, Skill, Power };
 enum class Phase { MainMenu, Battle, Reward, Campfire, Shop, Event, DeckEdit, VictoryThanks, Credits, Defeat };
 enum class RoomType { Battle, Campfire, Shop, Event };
 enum class DeckEditMode { None, UpgradeOne, RemoveOne, RemoveTwo };
+enum class PileOverlayType { None, Draw, Discard, Exhaust };
+enum class RelicType { EmberCharm, IronSigil, BloodVial, TacticianLens, ThornEmblem };
 
 struct CardDef {
     int id;
@@ -108,6 +112,18 @@ struct AppConfig {
     float textScale = 1.0f;
 };
 
+namespace Balance {
+constexpr int kBaseTurnEnergy = 3;
+constexpr int kStartingMaxHp = 80;
+constexpr int kStartingGold = 99;
+constexpr int kStartingPotionCount = 1;
+constexpr int kStartingPotionMax = 4;
+constexpr int kStartingPotionCapacityPrice = 85;
+constexpr int kStartingDeckRemovePrice = 70;
+constexpr int kEliteRelicDropChance = 70;
+constexpr int kBloodVialHeal = 5;
+} // namespace Balance
+
 class Game {
 public:
     static std::vector<FloorNode> defaultFloorPlan() {
@@ -170,6 +186,48 @@ public:
         expect(plan[7].type == RoomType::Event && plan[7].eventId == 1, "floor 8 event 1");
         expect(plan[12].type == RoomType::Event && plan[12].eventId == 2, "floor 13 event 2");
         expect(plan[14].type == RoomType::Battle && plan[14].enemyIndex == 7, "floor 15 final boss");
+
+        expect(parseWinsFromProgressLine("wins=12") == 12, "progress parse valid wins");
+        expect(parseWinsFromProgressLine("wins=-7") == 0, "progress parse clamps negative wins");
+        expect(parseWinsFromProgressLine("wins=abc") == 0, "progress parse invalid numeric");
+        expect(parseWinsFromProgressLine("foo=9") == 0, "progress parse ignores unknown key");
+        expect(extractWinsFromProgressLines({"wins=3", "wins=7"}) == 7, "progress parse last wins entry");
+        expect(extractWinsFromProgressLines({"#comment", "foo=2"}) == 0, "progress parse default wins");
+        expect(serializeWinsProgressLine(-9) == "wins=0", "progress serialize clamps negative");
+        expect(serializeWinsProgressLine(15) == "wins=15", "progress serialize positive value");
+        expect(isTextureSizeAvailable(sf::Vector2u(0u, 0u)) == false, "texture fallback for empty size");
+        expect(isTextureSizeAvailable(sf::Vector2u(1u, 0u)) == false, "texture fallback for zero height");
+        expect(isTextureSizeAvailable(sf::Vector2u(0u, 2u)) == false, "texture fallback for zero width");
+        expect(isTextureSizeAvailable(sf::Vector2u(8u, 8u)) == true, "texture available for positive size");
+
+        std::ostringstream validationSink;
+        CardDef validCard{};
+        validCard.id = 1;
+        validCard.cost = 1;
+        validCard.hits = 1;
+        expect(validateCardDefBasic(validCard, validationSink), "card validation accepts valid card");
+        CardDef invalidCostCard = validCard;
+        invalidCostCard.cost = -1;
+        expect(!validateCardDefBasic(invalidCostCard, validationSink), "card validation rejects invalid cost");
+        CardDef invalidHitsCard = validCard;
+        invalidHitsCard.hits = 0;
+        expect(!validateCardDefBasic(invalidHitsCard, validationSink), "card validation rejects invalid hits");
+
+        EnemyDef validEnemy{"valid enemy", 10, false, false, {{"攻击 1", 1, 1, 0, 0, 0, 0}}};
+        expect(validateEnemyDefBasic(validEnemy, 0, validationSink), "enemy validation accepts valid enemy");
+        EnemyDef invalidEnemyHp = validEnemy;
+        invalidEnemyHp.maxHp = 0;
+        expect(!validateEnemyDefBasic(invalidEnemyHp, 0, validationSink), "enemy validation rejects hp <= 0");
+        EnemyDef invalidEnemyPattern = validEnemy;
+        invalidEnemyPattern.pattern.clear();
+        expect(!validateEnemyDefBasic(invalidEnemyPattern, 0, validationSink), "enemy validation rejects empty pattern");
+
+        FloorNode validBattleNode{RoomType::Battle, 1, 0};
+        expect(validateFloorNodeBasic(validBattleNode, 0, 8, validationSink), "floor validation accepts valid battle node");
+        FloorNode invalidBattleNode{RoomType::Battle, 99, 0};
+        expect(!validateFloorNodeBasic(invalidBattleNode, 0, 8, validationSink), "floor validation rejects out-of-range enemy index");
+        FloorNode invalidEventNode{RoomType::Event, -1, 9};
+        expect(!validateFloorNodeBasic(invalidEventNode, 0, 8, validationSink), "floor validation rejects invalid event id");
 
         CardDef cheap{};
         cheap.cost = 0;
@@ -371,13 +429,26 @@ public:
         expect(simulateStokeDrawAfterExhaust(5, 2, 1) == 3, "stoke redraw limited by available piles");
         expect(simulateStokeDrawAfterExhaust(10, 20, 0) == 9, "stoke redraw with large hand");
         expect(equalsIntVector(simulateStokeConsecutiveTurnDraws({5, 4}, 8, 3), {4, 3}), "stoke consecutive turn draws");
+        const std::vector<int> starterDeck = starterDeckTemplate();
+        expect(starterDeck.size() == 10u, "starter deck has 10 cards");
+        expect(isStarterDeckTemplateValid(starterDeck), "starter deck composition valid");
+        expect(hasUniqueRelics({RelicType::EmberCharm, RelicType::IronSigil, RelicType::BloodVial}), "unique relic list valid");
+        expect(!hasUniqueRelics({RelicType::EmberCharm, RelicType::EmberCharm}), "duplicate relic list rejected");
+        expect(relicThornDamage(true) == 1, "thorn relic retaliation tuned");
+        expect(relicThornDamage(false) == 0, "thorn retaliation absent without relic");
+        expect(relicBattleStartHeal(true) == 5, "blood vial heal tuned");
+        expect(relicBattleStartHeal(false) == 0, "blood vial absent no heal");
+        expect(relicTurnStartEnergyBonus(0, true) == 1, "ember first turn bonus active");
+        expect(relicTurnStartEnergyBonus(1, true) == 0, "ember later turns no bonus");
+        expect(relicTurnStartDrawBonus(true) == 1, "tactician draw bonus active");
+        expect(relicTurnStartDrawBonus(false) == 0, "tactician draw bonus absent");
 
         out << (success ? "SELF_TEST_PASS" : "SELF_TEST_FAIL") << '\n';
         return success;
     }
 
     Game()
-        : window(sf::VideoMode(1280, 720), "迷你尖塔 Demo"),
+        : window(sf::VideoMode(1280, 720), sf::String(L"尖塔战士")),
           rng(static_cast<std::mt19937::result_type>(std::random_device{}())) {
                 loadConfig();
                 enableCombatAnimations = config.enableAnimations;
@@ -386,6 +457,9 @@ public:
         loadTextures();
         initCards();
         initEnemies();
+        if (!validateGameData(std::cerr)) {
+            throw std::runtime_error("Invalid game data detected during startup");
+        }
         loadProgress();
         phase = Phase::MainMenu;
     }
@@ -424,6 +498,10 @@ private:
     sf::Texture startTex;
     sf::Texture exitTex;
     sf::Texture thanksTex;
+    sf::Texture uiGoldTex;
+    sf::Texture uiPotionTex;
+    sf::Texture uiDeckTex;
+    sf::Texture uiRelicTex;
 
     std::mt19937 rng;
 
@@ -444,15 +522,16 @@ private:
     Combatant enemy;
     int enemyIntentIndex = 0;
 
-    int playerEnergy = 3;
+    int playerEnergy = Balance::kBaseTurnEnergy;
     int playerStrengthPerTurn = 0;
     int playerEnergyPerTurn = 0;
     int totalWins = 0;
-    int gold = 99;
-    int potionCount = 1;
-    int potionMax = 4;
-    int potionCapacityPrice = 85;
-    int deckRemovePrice = 70;
+    int gold = Balance::kStartingGold;
+    int potionCount = Balance::kStartingPotionCount;
+    int potionMax = Balance::kStartingPotionMax;
+    int potionCapacityPrice = Balance::kStartingPotionCapacityPrice;
+    int deckRemovePrice = Balance::kStartingDeckRemovePrice;
+    int eliteRelicDropChance = Balance::kEliteRelicDropChance;
     bool campfireDidAction = false;
     DeckEditMode deckEditMode = DeckEditMode::None;
     int deckEditRemaining = 0;
@@ -464,14 +543,15 @@ private:
     std::vector<int> exhaustPile;
 
     std::vector<int> rewardChoices;
+    std::vector<RelicType> relics;
     std::deque<std::string> logs;
     std::vector<FloatingText> floatingTexts;
     PendingCardPlay pendingCard;
     PendingEnemyTurn pendingEnemy;
     AppConfig config;
 
-    sf::FloatRect endTurnRect{1070.f, 620.f, 170.f, 70.f};
-    sf::FloatRect potionRect{1040.f, 530.f, 200.f, 72.f};
+    sf::FloatRect endTurnRect{1146.f, 530.f, 94.f, 40.f};
+    sf::FloatRect potionRect{1168.f, 422.f, 102.f, 52.f};
     sf::FloatRect menuStartRect{470.f, 320.f, 340.f, 82.f};
     sf::FloatRect menuExitRect{470.f, 430.f, 340.f, 82.f};
     sf::FloatRect backMenuRect{470.f, 560.f, 340.f, 72.f};
@@ -483,6 +563,14 @@ private:
     sf::FloatRect eventLeftRect{180.f, 500.f, 430.f, 120.f};
     sf::FloatRect eventRightRect{670.f, 500.f, 430.f, 120.f};
     sf::FloatRect deckDoneRect{1000.f, 620.f, 230.f, 70.f};
+    sf::FloatRect runStatsRect{902.f, 14.f, 350.f, 108.f};
+    sf::FloatRect ownedDeckCloseRect{1050.f, 120.f, 180.f, 42.f};
+    sf::FloatRect relicInspectRect{1084.f, 104.f, 166.f, 22.f};
+    sf::FloatRect relicOverlayCloseRect{1040.f, 122.f, 190.f, 42.f};
+    sf::FloatRect drawPileRect{20.f, 584.f, 102.f, 52.f};
+    sf::FloatRect discardPileRect{1168.f, 300.f, 102.f, 52.f};
+    sf::FloatRect exhaustPileRect{1168.f, 360.f, 102.f, 52.f};
+    sf::FloatRect pileOverlayCloseRect{930.f, 130.f, 190.f, 42.f};
 
     float enemyHitFlashTimer = 0.0f;
     float playerHitFlashTimer = 0.0f;
@@ -491,6 +579,12 @@ private:
     bool enableCombatAnimations = true;
     Phase deckEditReturnPhase = Phase::MainMenu;
     bool deckEditAdvanceAfterDone = false;
+    bool showOwnedDeckOverlay = false;
+    bool showRelicOverlay = false;
+    PileOverlayType activePileOverlay = PileOverlayType::None;
+    std::string battleQuoteText;
+    float battleQuoteTimer = 0.0f;
+    int battleTurnCount = 0;
     std::string actionHint;
     sf::Color actionHintColor = sf::Color(240, 230, 180);
     float actionHintTimer = 0.0f;
@@ -678,6 +772,10 @@ private:
         loadTexture(startTex, "assets/images/ui/start.png");
         loadTexture(exitTex, "assets/images/ui/exit.png");
         loadTexture(thanksTex, "assets/images/ui/thanks.png");
+        loadTexture(uiGoldTex, "assets/images/ui/stat_gold.png");
+        loadTexture(uiPotionTex, "assets/images/ui/stat_potion.png");
+        loadTexture(uiDeckTex, "assets/images/ui/stat_deck.png");
+        loadTexture(uiRelicTex, "assets/images/ui/stat_relic.png");
     }
 
     void pushLog(const std::string& line) {
@@ -685,6 +783,244 @@ private:
         while (logs.size() > 12) {
             logs.pop_front();
         }
+    }
+
+    std::string storylineIntro() const {
+        return "火焰高塔从未熄灭。每一层都在低语，诱你献出血、钢与记忆。";
+    }
+
+    std::string storylineGoal() const {
+        return "你是最后一名攀塔者。穿过15层，击败尖塔守卫，让余烬再次点亮王城。";
+    }
+
+    std::string enemyEntranceQuote(int enemyIndex) const {
+        switch (enemyIndex) {
+            case 0: return "黏液斗士：你的剑，会陷进我的身体。";
+            case 1: return "邪教徒：尖塔将吞下你的名字。";
+            case 2: return "寄生突袭者：痛苦会让你学会低头。";
+            case 3: return "刀盾卫兵：此路到此为止。";
+            case 4: return "装甲骑士：让我听见你盔甲碎裂的声音。";
+            case 5: return "鲜血斗士：鲜血，是唯一的誓言。";
+            case 6: return "诅咒祭司：诅咒会比你先抵达终点。";
+            case 7: return "尖塔守卫：你的火焰很亮，但终会熄灭。";
+            default: return "未知敌人：......";
+        }
+    }
+
+    static std::string relicName(RelicType relic) {
+        switch (relic) {
+            case RelicType::EmberCharm: return "余烬护符";
+            case RelicType::IronSigil: return "铁躯纹章";
+            case RelicType::BloodVial: return "血瓶";
+            case RelicType::TacticianLens: return "战术透镜";
+            case RelicType::ThornEmblem: return "荆棘徽记";
+            default: return "未知遗物";
+        }
+    }
+
+    static std::string relicDesc(RelicType relic) {
+        switch (relic) {
+            case RelicType::EmberCharm: return "首回合开始时额外获得 1 点能量";
+            case RelicType::IronSigil: return "获得时 +8 最大生命并回复 8 点生命";
+            case RelicType::BloodVial: return "每场战斗开始时回复 5 点生命";
+            case RelicType::TacticianLens: return "每回合额外抽 1 张牌";
+            case RelicType::ThornEmblem: return "受到攻击时反伤 1";
+            default: return "";
+        }
+    }
+
+    static int relicBattleStartHeal(bool hasBloodVial) {
+        return hasBloodVial ? Balance::kBloodVialHeal : 0;
+    }
+
+    static int relicTurnStartEnergyBonus(int battleTurnIndex, bool hasEmberCharm) {
+        return (hasEmberCharm && battleTurnIndex == 0) ? 1 : 0;
+    }
+
+    static int relicTurnStartDrawBonus(bool hasTacticianLens) {
+        return hasTacticianLens ? 1 : 0;
+    }
+
+    static std::vector<int> starterDeckTemplate() {
+        return {1, 1, 1, 1, 2, 2, 2, 2, 3, 21};
+    }
+
+    static bool isStarterDeckTemplateValid(const std::vector<int>& deck) {
+        if (deck.size() != 10u) {
+            return false;
+        }
+        std::unordered_map<int, int> counts;
+        for (int id : deck) {
+            counts[id] += 1;
+        }
+        return counts[1] == 4 && counts[2] == 4 && counts[3] == 1 && counts[21] == 1;
+    }
+
+    static bool hasUniqueRelics(const std::vector<RelicType>& relicList) {
+        for (size_t i = 0; i < relicList.size(); ++i) {
+            for (size_t j = i + 1; j < relicList.size(); ++j) {
+                if (relicList[i] == relicList[j]) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    static int relicThornDamage(bool hasThornRelic) {
+        return hasThornRelic ? 1 : 0;
+    }
+
+    bool hasRelic(RelicType relic) const {
+        return std::find(relics.begin(), relics.end(), relic) != relics.end();
+    }
+
+    static bool validateCardDefBasic(const CardDef& card, std::ostream& out) {
+        if (card.cost < 0 || card.cost > 6) {
+            out << "[error] invalid card cost id=" << card.id << " cost=" << card.cost << '\n';
+            return false;
+        }
+        if (card.hits <= 0 || card.hits > 10) {
+            out << "[error] invalid card hits id=" << card.id << " hits=" << card.hits << '\n';
+            return false;
+        }
+        return true;
+    }
+
+    static bool validateEnemyDefBasic(const EnemyDef& enemyDef, size_t index, std::ostream& out) {
+        if (enemyDef.maxHp <= 0) {
+            out << "[error] invalid enemy hp index=" << index << " hp=" << enemyDef.maxHp << '\n';
+            return false;
+        }
+        if (enemyDef.pattern.empty()) {
+            out << "[error] enemy has empty intent pattern index=" << index << '\n';
+            return false;
+        }
+        return true;
+    }
+
+    static bool validateFloorNodeBasic(const FloorNode& node, size_t floorIndex, int enemyCount, std::ostream& out) {
+        if (node.type == RoomType::Battle) {
+            if (node.enemyIndex < 0 || node.enemyIndex >= enemyCount) {
+                out << "[error] floor plan battle enemy index out of range floor=" << floorIndex
+                    << " enemyIndex=" << node.enemyIndex << '\n';
+                return false;
+            }
+        }
+        if (node.type == RoomType::Event) {
+            if (node.eventId != 1 && node.eventId != 2) {
+                out << "[error] floor plan invalid event id floor=" << floorIndex
+                    << " eventId=" << node.eventId << '\n';
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateCardPoolData(std::ostream& out) const {
+        std::unordered_set<int> ids;
+        for (const auto& card : cardPool) {
+            if (!ids.insert(card.id).second) {
+                out << "[error] duplicate card id: " << card.id << '\n';
+                return false;
+            }
+            if (!validateCardDefBasic(card, out)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateEnemyData(std::ostream& out) const {
+        if (enemySequence.empty()) {
+            out << "[error] enemy sequence is empty" << '\n';
+            return false;
+        }
+        for (size_t i = 0; i < enemySequence.size(); ++i) {
+            if (!validateEnemyDefBasic(enemySequence[i], i, out)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateFloorPlanData(std::ostream& out) const {
+        if (floorPlan.empty()) {
+            out << "[error] floor plan is empty" << '\n';
+            return false;
+        }
+        for (size_t i = 0; i < floorPlan.size(); ++i) {
+            if (!validateFloorNodeBasic(floorPlan[i], i, static_cast<int>(enemySequence.size()), out)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool validateGameData(std::ostream& out) const {
+        return validateCardPoolData(out) && validateEnemyData(out) && validateFloorPlanData(out);
+    }
+
+    std::string relicSummaryShort() const {
+        if (relics.empty()) {
+            return "无";
+        }
+        std::string summary;
+        const int showCount = std::min(2, static_cast<int>(relics.size()));
+        for (int i = 0; i < showCount; ++i) {
+            if (!summary.empty()) {
+                summary += "、";
+            }
+            summary += relicName(relics[i]);
+        }
+        if (static_cast<int>(relics.size()) > showCount) {
+            summary += "...";
+        }
+        return summary;
+    }
+
+    void grantRelic(RelicType relic) {
+        if (hasRelic(relic)) {
+            return;
+        }
+
+        relics.push_back(relic);
+        pushLog("获得遗物：" + relicName(relic));
+        pushLog("遗物效果：" + relicDesc(relic));
+        showActionHint("获得遗物：" + relicName(relic), sf::Color(255, 226, 150));
+
+        if (relic == RelicType::IronSigil) {
+            player.maxHp += 8;
+            player.hp = std::min(player.maxHp, player.hp + 8);
+            pushLog("铁躯纹章生效：最大生命 +8，回复 8 点生命");
+        }
+    }
+
+    bool tryGrantEliteRelicDrop() {
+        std::uniform_int_distribution<int> rollDist(1, 100);
+        if (rollDist(rng) > eliteRelicDropChance) {
+            return false;
+        }
+
+        std::vector<RelicType> candidates = {
+            RelicType::EmberCharm,
+            RelicType::IronSigil,
+            RelicType::BloodVial,
+            RelicType::TacticianLens,
+            RelicType::ThornEmblem
+        };
+
+        candidates.erase(
+            std::remove_if(candidates.begin(), candidates.end(), [&](RelicType relic) { return hasRelic(relic); }),
+            candidates.end());
+
+        if (candidates.empty()) {
+            return false;
+        }
+
+        std::uniform_int_distribution<int> dist(0, static_cast<int>(candidates.size()) - 1);
+        grantRelic(candidates[dist(rng)]);
+        return true;
     }
 
     void initCards() {
@@ -801,22 +1137,43 @@ private:
         floorPlan = defaultFloorPlan();
     }
 
+    static int parseWinsFromProgressLine(const std::string& line) {
+        if (line.rfind("wins=", 0) != 0) {
+            return 0;
+        }
+        try {
+            return std::max(0, std::stoi(line.substr(5)));
+        } catch (...) {
+            return 0;
+        }
+    }
+
+    static int extractWinsFromProgressLines(const std::vector<std::string>& lines) {
+        int parsedWins = 0;
+        for (const auto& line : lines) {
+            if (line.rfind("wins=", 0) == 0) {
+                parsedWins = parseWinsFromProgressLine(line);
+            }
+        }
+        return parsedWins;
+    }
+
+    static std::string serializeWinsProgressLine(int wins) {
+        return "wins=" + std::to_string(std::max(0, wins));
+    }
+
     void loadProgress() {
         std::ifstream in(kSavePath);
         if (!in) {
             return;
         }
 
+        std::vector<std::string> lines;
         std::string line;
         while (std::getline(in, line)) {
-            if (line.rfind("wins=", 0) == 0) {
-                try {
-                    totalWins = std::max(0, std::stoi(line.substr(5)));
-                } catch (...) {
-                    totalWins = 0;
-                }
-            }
+            lines.push_back(line);
         }
+        totalWins = extractWinsFromProgressLines(lines);
     }
 
     void saveProgress() const {
@@ -824,7 +1181,7 @@ private:
         if (!out) {
             return;
         }
-        out << "wins=" << totalWins << "\n";
+        out << serializeWinsProgressLine(totalWins) << "\n";
     }
 
     const CardDef* findCard(int id) const {
@@ -918,7 +1275,7 @@ private:
     }
 
     static int turnStartEnergy(int energyPerTurn) {
-        return 3 + std::max(0, energyPerTurn);
+        return Balance::kBaseTurnEnergy + std::max(0, energyPerTurn);
     }
 
     static bool validateFlatEnergyCurve(int energyPerTurn, int turns, int expectedEnergy) {
@@ -1332,8 +1689,8 @@ private:
     }
 
     void resetRun() {
-        player.maxHp = 80;
-        player.hp = 80;
+        player.maxHp = Balance::kStartingMaxHp;
+        player.hp = Balance::kStartingMaxHp;
         player.block = 0;
         player.strength = 0;
         player.weak = 0;
@@ -1341,11 +1698,12 @@ private:
 
         playerStrengthPerTurn = 0;
         playerEnergyPerTurn = 0;
-        gold = 99;
-        potionCount = 1;
-        potionMax = 4;
-        potionCapacityPrice = 85;
-        deckRemovePrice = 70;
+        gold = Balance::kStartingGold;
+        potionCount = Balance::kStartingPotionCount;
+        potionMax = Balance::kStartingPotionMax;
+        potionCapacityPrice = Balance::kStartingPotionCapacityPrice;
+        deckRemovePrice = Balance::kStartingDeckRemovePrice;
+        eliteRelicDropChance = Balance::kEliteRelicDropChance;
         enemyHitFlashTimer = 0.0f;
         playerHitFlashTimer = 0.0f;
         turnBannerTimer = 0.0f;
@@ -1369,19 +1727,15 @@ private:
         currentEventId = 0;
         actionHint.clear();
         actionHintTimer = 0.0f;
+        showOwnedDeckOverlay = false;
+        showRelicOverlay = false;
+        activePileOverlay = PileOverlayType::None;
+        battleQuoteText.clear();
+        battleQuoteTimer = 0.0f;
+        battleTurnCount = 0;
+        relics.clear();
 
-        for (int i = 0; i < 4; ++i) {
-            masterDeck.push_back(1);
-        }
-        for (int i = 0; i < 3; ++i) {
-            masterDeck.push_back(2);
-        }
-        for (int i = 0; i < 2; ++i) {
-            masterDeck.push_back(2);
-        }
-        masterDeck.push_back(3);
-        masterDeck.push_back(21);
-        masterDeck.push_back(22);
+        masterDeck = starterDeckTemplate();
 
         currentFloor = 0;
         phase = Phase::MainMenu;
@@ -1459,6 +1813,12 @@ private:
         exhaustPile.clear();
         pendingCard.active = false;
         pendingEnemy.active = false;
+        showOwnedDeckOverlay = false;
+        showRelicOverlay = false;
+        activePileOverlay = PileOverlayType::None;
+        battleQuoteText.clear();
+        battleQuoteTimer = 0.0f;
+        battleTurnCount = 0;
 
         player.block = 0;
         player.strength = 0;
@@ -1477,15 +1837,34 @@ private:
         enemy.weak = 0;
         enemy.vulnerable = 0;
 
+        if (hasRelic(RelicType::BloodVial)) {
+            const int oldHp = player.hp;
+            player.hp = std::min(player.maxHp, player.hp + relicBattleStartHeal(true));
+            const int healed = player.hp - oldHp;
+            if (healed > 0) {
+                pushLog("血瓶生效：战前回复 " + std::to_string(healed) + " 点生命");
+            }
+        }
+
         pushLog("战斗开始：" + def.name);
+        battleQuoteText = enemyEntranceQuote(currentEnemyIndex);
+        battleQuoteTimer = 4.0f;
+        pushLog(battleQuoteText);
         startPlayerTurn();
     }
 
     void startPlayerTurn() {
         player.block = 0;
         playerEnergy = turnStartEnergy(playerEnergyPerTurn);
+        const int energyBonus = relicTurnStartEnergyBonus(battleTurnCount, hasRelic(RelicType::EmberCharm));
+        if (energyBonus > 0) {
+            playerEnergy += energyBonus;
+            pushLog("余烬护符生效：首回合额外获得 1 点能量");
+        }
         player.strength += playerStrengthPerTurn;
-        drawCards(5);
+        int drawAmount = 5 + relicTurnStartDrawBonus(hasRelic(RelicType::TacticianLens));
+        drawCards(drawAmount);
+        battleTurnCount++;
         turnBannerTimer = 1.1f;
         pushLog("你的回合开始");
     }
@@ -1665,7 +2044,15 @@ private:
         gold += battleGold;
         pushLog("获得 " + std::to_string(battleGold) + " 金币与 1 瓶药剂（当前金币 " + std::to_string(gold) + "）");
         showActionHint("战斗奖励：+" + std::to_string(battleGold) + " 金币", sf::Color(200, 255, 170));
+        if (def != nullptr && def->elite) {
+            if (tryGrantEliteRelicDrop()) {
+                pushLog("精英掉落了遗物");
+            } else {
+                pushLog("本次精英未掉落遗物");
+            }
+        }
         if (currentFloor == static_cast<int>(floorPlan.size()) - 1) {
+            pushLog("尖塔守卫倒下：余烬仍在，你已穿越黑暗。");
             totalWins++;
             saveProgress();
             transitionTo(Phase::VictoryThanks, "击败最终BOSS");
@@ -1776,6 +2163,15 @@ private:
                 const int dmg = adjustedDamage(intent.damage, enemy, player);
                 dealDamage(player, dmg, true);
                 pushLog("敌人造成 " + std::to_string(dmg) + " 点伤害");
+                if (hasRelic(RelicType::ThornEmblem) && enemy.hp > 0) {
+                    const int thorns = relicThornDamage(true);
+                    dealDamage(enemy, thorns, false);
+                    pushLog("荆棘徽记反伤 " + std::to_string(thorns) + " 点伤害");
+                    if (enemy.hp <= 0) {
+                        onBattleWon();
+                        return;
+                    }
+                }
                 if (player.hp <= 0) {
                     break;
                 }
@@ -1801,13 +2197,41 @@ private:
 
     std::vector<sf::FloatRect> handRects() const {
         std::vector<sf::FloatRect> rects;
-        const float cardW = 110.f;
-        const float cardH = 220.f;
-        const float gap = 6.f;
-        const float totalW = static_cast<float>(hand.size()) * cardW +
-                             static_cast<float>(std::max(0, static_cast<int>(hand.size()) - 1)) * gap;
+        const int count = static_cast<int>(hand.size());
+        float cardW = 94.f;
+        float cardH = 188.f;
+        float gap = 6.f;
+        float y = 488.f;
+
+        if (count >= 8) {
+            cardW = 88.f;
+            cardH = 180.f;
+            gap = 4.f;
+            y = 496.f;
+        }
+        if (count >= 10) {
+            cardW = 80.f;
+            cardH = 170.f;
+            gap = 2.f;
+            y = 506.f;
+        }
+        if (count >= 12) {
+            cardW = 72.f;
+            cardH = 162.f;
+            gap = 1.f;
+            y = 514.f;
+        }
+
+        const float maxHandWidth = 1180.f;
+        float totalW = static_cast<float>(count) * cardW +
+                       static_cast<float>(std::max(0, count - 1)) * gap;
+        if (count > 1 && totalW > maxHandWidth) {
+            gap = std::max(0.f, (maxHandWidth - static_cast<float>(count) * cardW) / static_cast<float>(count - 1));
+            totalW = static_cast<float>(count) * cardW + static_cast<float>(count - 1) * gap;
+        }
+
         float startX = (1280.f - totalW) * 0.5f;
-        const float y = 455.f;
+        startX = std::max(10.f, startX);
         for (size_t i = 0; i < hand.size(); ++i) {
             rects.emplace_back(startX + i * (cardW + gap), y, cardW, cardH);
         }
@@ -1937,6 +2361,70 @@ private:
             }
         } else if (phase == Phase::Battle) {
             if (pendingCard.active || pendingEnemy.active) {
+                return;
+            }
+
+            if (showOwnedDeckOverlay) {
+                if (runStatsRect.contains(mouse) || ownedDeckCloseRect.contains(mouse)) {
+                    showOwnedDeckOverlay = false;
+                }
+                return;
+            }
+
+            if (showRelicOverlay) {
+                if (relicInspectRect.contains(mouse) || relicOverlayCloseRect.contains(mouse)) {
+                    showRelicOverlay = false;
+                }
+                return;
+            }
+
+            if (relicInspectRect.contains(mouse)) {
+                activePileOverlay = PileOverlayType::None;
+                showOwnedDeckOverlay = false;
+                showRelicOverlay = true;
+                return;
+            }
+
+            if (runStatsRect.contains(mouse)) {
+                activePileOverlay = PileOverlayType::None;
+                showRelicOverlay = false;
+                showOwnedDeckOverlay = true;
+                return;
+            }
+
+            if (activePileOverlay != PileOverlayType::None) {
+                if (pileOverlayCloseRect.contains(mouse)) {
+                    activePileOverlay = PileOverlayType::None;
+                    return;
+                }
+                if (drawPileRect.contains(mouse)) {
+                    activePileOverlay = PileOverlayType::Draw;
+                    return;
+                }
+                if (discardPileRect.contains(mouse)) {
+                    activePileOverlay = PileOverlayType::Discard;
+                    return;
+                }
+                if (exhaustPileRect.contains(mouse)) {
+                    activePileOverlay = PileOverlayType::Exhaust;
+                    return;
+                }
+                return;
+            }
+
+            if (drawPileRect.contains(mouse)) {
+                showOwnedDeckOverlay = false;
+                activePileOverlay = PileOverlayType::Draw;
+                return;
+            }
+            if (discardPileRect.contains(mouse)) {
+                showOwnedDeckOverlay = false;
+                activePileOverlay = PileOverlayType::Discard;
+                return;
+            }
+            if (exhaustPileRect.contains(mouse)) {
+                showOwnedDeckOverlay = false;
+                activePileOverlay = PileOverlayType::Exhaust;
                 return;
             }
 
@@ -2080,6 +2568,7 @@ private:
         playerHitFlashTimer = std::max(0.0f, playerHitFlashTimer - dt);
         turnBannerTimer = std::max(0.0f, turnBannerTimer - dt);
         actionHintTimer = std::max(0.0f, actionHintTimer - dt);
+        battleQuoteTimer = std::max(0.0f, battleQuoteTimer - dt);
 
         for (auto it = floatingTexts.begin(); it != floatingTexts.end();) {
             it->remaining = std::max(0.0f, it->remaining - dt);
@@ -2201,8 +2690,40 @@ private:
         }
     }
 
+    int wrappedLineCount(const std::string& text, int maxCharsPerLine) const {
+        if (text.empty()) {
+            return 1;
+        }
+        if (maxCharsPerLine <= 0) {
+            return 1;
+        }
+
+        const sf::String utfText = sf::String::fromUtf8(text.begin(), text.end());
+        int lines = 1;
+        int charCount = 0;
+        for (std::size_t i = 0; i < utfText.getSize(); ++i) {
+            const sf::Uint32 codepoint = utfText[i];
+            if (codepoint == '\n') {
+                lines++;
+                charCount = 0;
+                continue;
+            }
+
+            charCount++;
+            if (charCount >= maxCharsPerLine && i + 1 < utfText.getSize()) {
+                lines++;
+                charCount = 0;
+            }
+        }
+        return std::max(1, lines);
+    }
+
+    static bool isTextureSizeAvailable(const sf::Vector2u& size) {
+        return size.x > 0u && size.y > 0u;
+    }
+
     void drawTextureFit(const sf::Texture& tex, const sf::FloatRect& rect, sf::Color tint = sf::Color::White) {
-        if (tex.getSize().x == 0 || tex.getSize().y == 0) {
+        if (!isTextureSizeAvailable(tex.getSize())) {
             sf::RectangleShape placeholder(sf::Vector2f(rect.width, rect.height));
             placeholder.setPosition(rect.left, rect.top);
             placeholder.setFillColor(sf::Color(90, 36, 36, 210));
@@ -2242,6 +2763,16 @@ private:
         return &bossTex;
     }
 
+    sf::FloatRect enemyPortraitRect() const {
+        if (currentEnemyIndex >= 7) {
+            return sf::FloatRect(504.f, 154.f, 272.f, 272.f);
+        }
+        if (currentEnemyIndex >= 4) {
+            return sf::FloatRect(516.f, 166.f, 248.f, 248.f);
+        }
+        return sf::FloatRect(530.f, 178.f, 220.f, 220.f);
+    }
+
     sf::Color cardColor(CardType type) const {
         switch (type) {
             case CardType::Attack: return sf::Color(190, 80, 80);
@@ -2256,9 +2787,22 @@ private:
         box.setPosition(rect.left, rect.top);
         box.setFillColor(bg);
         box.setOutlineThickness(2.f);
-        box.setOutlineColor(sf::Color(12, 12, 12, 190));
+        box.setOutlineColor(sf::Color(238, 221, 170, 180));
         window.draw(box);
-        drawText(label, rect.left + 110.f, rect.top + 22.f, 30, sf::Color::White);
+        if (hasFont) {
+            sf::Text t;
+            t.setFont(font);
+            t.setString(sf::String::fromUtf8(label.begin(), label.end()));
+            t.setCharacterSize(30);
+            t.setFillColor(sf::Color(250, 248, 240));
+            const sf::FloatRect bounds = t.getLocalBounds();
+            const float x = rect.left + (rect.width - bounds.width) * 0.5f - bounds.left;
+            const float y = rect.top + (rect.height - bounds.height) * 0.5f - bounds.top - 3.f;
+            t.setPosition(x, y);
+            window.draw(t);
+        } else {
+            drawText(label, rect.left + 110.f, rect.top + 22.f, 30, sf::Color::White);
+        }
     }
 
     void renderActionHint() {
@@ -2279,93 +2823,329 @@ private:
     }
 
     void renderStatusPanel() {
-        sf::RectangleShape topBar(sf::Vector2f(1280.f, 170.f));
+        sf::RectangleShape topBar(sf::Vector2f(1280.f, 124.f));
         topBar.setPosition(0.f, 0.f);
-        topBar.setFillColor(sf::Color(24, 30, 42, 235));
+        topBar.setFillColor(sf::Color(18, 34, 42, 235));
         window.draw(topBar);
 
-        if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
-            drawText("敌人数据异常", 20.f, 78.f, 22, sf::Color(255, 120, 120));
-            return;
-        }
-        const EnemyDef& def = enemySequence[currentEnemyIndex];
+        sf::RectangleShape divider(sf::Vector2f(1280.f, 2.f));
+        divider.setPosition(0.f, 122.f);
+        divider.setFillColor(sf::Color(246, 224, 162, 130));
+        window.draw(divider);
 
-        drawTextureFit(logoTex, sf::FloatRect(18.f, 16.f, 34.f, 34.f));
-        drawText("迷你尖塔：铁甲战士", 60.f, 12.f, 28, sf::Color::White);
-        drawText("第 " + std::to_string(currentFloor + 1) + " / " + std::to_string(floorPlan.size()) + " 层", 20.f, 48.f, 22, sf::Color(220, 220, 220));
-        drawText(def.name, 20.f, 78.f, 22, sf::Color(255, 220, 160));
+        drawTextureFit(logoTex, sf::FloatRect(18.f, 14.f, 36.f, 36.f));
+        drawText("尖塔战士", 62.f, 11.f, 30, sf::Color::White);
+        drawText("第 " + std::to_string(currentFloor + 1) + " / " + std::to_string(floorPlan.size()) + " 层", 560.f, 18.f, 24, sf::Color(236, 228, 188));
 
-                std::ostringstream p;
-                p << "玩家生命 " << player.hp << "/" << player.maxHp << "  格挡 " << player.block << "  力量 " << player.strength
-                    << "  虚弱 " << player.weak << "  易伤 " << player.vulnerable << "  能量 " << playerEnergy;
-                drawText(p.str(), 20.f, 606.f, 20, sf::Color(200, 235, 200));
+        sf::RectangleShape playerPanel(sf::Vector2f(430.f, 64.f));
+        playerPanel.setPosition(20.f, 52.f);
+        playerPanel.setFillColor(sf::Color(26, 55, 62, 235));
+        playerPanel.setOutlineThickness(2.f);
+        playerPanel.setOutlineColor(sf::Color(225, 239, 216, 150));
+        window.draw(playerPanel);
 
-                drawText("牌组规模 " + std::to_string(masterDeck.size()) + "  |  金币 " + std::to_string(gold) + "  |  累计通关 " + std::to_string(totalWins),
-                                 20.f, 636.f, 20, sf::Color(220, 220, 180));
+        std::ostringstream p;
+        p << "玩家 " << player.hp << "/" << player.maxHp << "  格挡 " << player.block << "  力量 " << player.strength
+          << "  虚弱 " << player.weak << "  易伤 " << player.vulnerable;
+        drawText(p.str(), 32.f, 60.f, 20, sf::Color(210, 238, 210));
+        drawText("能量 " + std::to_string(playerEnergy), 32.f, 86.f, 24, sf::Color(255, 236, 160));
 
-        std::ostringstream e;
-        e << "敌人生命 " << enemy.hp << "/" << enemy.maxHp << "  格挡 " << enemy.block << "  力量 " << enemy.strength << "  虚弱 "
-          << enemy.weak << "  易伤 " << enemy.vulnerable;
-        drawText(e.str(), 20.f, 140.f, 20, sf::Color(235, 200, 200));
+        sf::RectangleShape runStats(sf::Vector2f(runStatsRect.width, runStatsRect.height));
+        runStats.setPosition(runStatsRect.left, runStatsRect.top);
+        runStats.setFillColor(sf::Color(48, 58, 34, 238));
+        runStats.setOutlineThickness(2.f);
+        runStats.setOutlineColor(sf::Color(255, 230, 166, 228));
+        window.draw(runStats);
 
-        const Intent& intent = currentEnemyIntent();
-        sf::RectangleShape intentBox(sf::Vector2f(470.f, 62.f));
-        intentBox.setPosition(700.f, 66.f);
-        intentBox.setFillColor(sf::Color(48, 40, 22, 230));
-        intentBox.setOutlineThickness(2.f);
-        intentBox.setOutlineColor(sf::Color(255, 210, 110, 230));
-        window.draw(intentBox);
-        drawTextureFit(intentTex, sf::FloatRect(712.f, 77.f, 44.f, 44.f));
-        drawText("敌人意图：" + intent.label, 768.f, 82.f, 26, sf::Color(255, 235, 150));
+        auto drawStatBadge = [&](sf::Texture& tex, const sf::FloatRect& iconRect) {
+            sf::RectangleShape badge(sf::Vector2f(iconRect.width + 6.f, iconRect.height + 6.f));
+            badge.setPosition(iconRect.left - 3.f, iconRect.top - 3.f);
+            badge.setFillColor(sf::Color(76, 65, 42, 186));
+            badge.setOutlineThickness(1.f);
+            badge.setOutlineColor(sf::Color(248, 228, 170, 148));
+            window.draw(badge);
+            drawTextureFit(tex, iconRect);
+        };
+
+        drawStatBadge(uiGoldTex, sf::FloatRect(runStatsRect.left + 12.f, runStatsRect.top + 6.f, 19.f, 19.f));
+        drawText("金币 " + std::to_string(gold), runStatsRect.left + 38.f, runStatsRect.top + 7.f, 18, sf::Color(255, 238, 184));
+        drawStatBadge(uiPotionTex, sf::FloatRect(runStatsRect.left + 176.f, runStatsRect.top + 6.f, 19.f, 19.f));
+        drawText("药剂 " + std::to_string(potionCount) + "/" + std::to_string(potionMax), runStatsRect.left + 202.f, runStatsRect.top + 7.f, 18, sf::Color(244, 236, 216));
+
+        drawStatBadge(uiDeckTex, sf::FloatRect(runStatsRect.left + 12.f, runStatsRect.top + 32.f, 19.f, 19.f));
+        drawText("卡组 " + std::to_string(masterDeck.size()), runStatsRect.left + 38.f, runStatsRect.top + 33.f, 18, sf::Color(232, 232, 212));
+        drawStatBadge(uiRelicTex, sf::FloatRect(runStatsRect.left + 176.f, runStatsRect.top + 32.f, 19.f, 19.f));
+        drawText("遗物 " + std::to_string(relics.size()), runStatsRect.left + 202.f, runStatsRect.top + 33.f, 18, sf::Color(232, 232, 212));
+
+        drawText("遗物：" + relicSummaryShort(), runStatsRect.left + 12.f, runStatsRect.top + 56.f, 15, sf::Color(232, 214, 170));
+        drawText("点击查看已拥有全部卡牌", runStatsRect.left + 12.f, runStatsRect.top + 76.f, 15, sf::Color(215, 205, 170));
+        sf::RectangleShape relicBtn(sf::Vector2f(relicInspectRect.width, relicInspectRect.height));
+        relicBtn.setPosition(relicInspectRect.left, relicInspectRect.top);
+        relicBtn.setFillColor(sf::Color(104, 92, 50, 230));
+        relicBtn.setOutlineThickness(1.f);
+        relicBtn.setOutlineColor(sf::Color(250, 234, 182, 178));
+        window.draw(relicBtn);
+        drawText("查看遗物总览", relicInspectRect.left + 10.f, relicInspectRect.top + 1.f, 16, sf::Color(255, 238, 182));
 
         if (playerHitFlashTimer > 0.0f) {
             const float ratio = std::min(1.0f, playerHitFlashTimer / 0.22f);
-            sf::RectangleShape flash(sf::Vector2f(1280.f, 170.f));
+            sf::RectangleShape flash(sf::Vector2f(1280.f, 124.f));
             flash.setPosition(0.f, 0.f);
             flash.setFillColor(sf::Color(220, 40, 40, static_cast<sf::Uint8>(35.f + ratio * 80.f)));
             window.draw(flash);
         }
+    }
 
-        drawText("药剂 " + std::to_string(potionCount) + "/" + std::to_string(potionMax), potionRect.left + 14.f, potionRect.top + 10.f, 20, sf::Color(245, 235, 180));
-        drawText("点击：+10格挡 抽1", potionRect.left + 14.f, potionRect.top + 38.f, 16, sf::Color(220, 220, 220));
+    void renderOwnedDeckOverlay() {
+        sf::RectangleShape curtain(sf::Vector2f(1280.f, 720.f));
+        curtain.setFillColor(sf::Color(8, 10, 18, 200));
+        window.draw(curtain);
+
+        sf::RectangleShape panel(sf::Vector2f(980.f, 560.f));
+        panel.setPosition(150.f, 90.f);
+        panel.setFillColor(sf::Color(24, 30, 44, 245));
+        panel.setOutlineThickness(2.f);
+        panel.setOutlineColor(sf::Color(240, 216, 148, 220));
+        window.draw(panel);
+
+        drawText("当前持有卡牌总览", 182.f, 112.f, 34, sf::Color(250, 238, 180));
+
+        sf::RectangleShape closeBtn(sf::Vector2f(ownedDeckCloseRect.width, ownedDeckCloseRect.height));
+        closeBtn.setPosition(ownedDeckCloseRect.left, ownedDeckCloseRect.top);
+        closeBtn.setFillColor(sf::Color(90, 56, 56, 230));
+        closeBtn.setOutlineThickness(2.f);
+        closeBtn.setOutlineColor(sf::Color(0, 0, 0, 180));
+        window.draw(closeBtn);
+        drawText("关闭总览", ownedDeckCloseRect.left + 42.f, ownedDeckCloseRect.top + 9.f, 22, sf::Color::White);
+
+        std::unordered_map<int, int> counts;
+        for (int id : masterDeck) {
+            counts[id] += 1;
+        }
+
+        std::vector<std::pair<int, int>> entries;
+        entries.reserve(counts.size());
+        for (const auto& item : counts) {
+            entries.push_back(item);
+        }
+        std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+            return a.first < b.first;
+        });
+
+        float y = 172.f;
+        int shown = 0;
+        for (const auto& item : entries) {
+            const CardDef* c = findCard(item.first);
+            if (!c) {
+                continue;
+            }
+            drawText(c->name + " x" + std::to_string(item.second), 182.f, y, 22, sf::Color(230, 230, 230));
+            drawText("费 " + std::to_string(c->cost) + "  " + c->desc, 430.f, y + 2.f, 18, sf::Color(190, 206, 220));
+            y += 30.f;
+            shown++;
+            if (y > 612.f) {
+                break;
+            }
+        }
+
+        if (shown == 0) {
+            drawText("当前没有卡牌", 182.f, 174.f, 24, sf::Color(255, 190, 190));
+        }
+
+        drawText("再次点击右上角面板或" + std::string("关闭总览") + "可返回战斗", 182.f, 618.f, 20, sf::Color(206, 206, 206));
+    }
+
+    void renderRelicOverlay() {
+        sf::RectangleShape curtain(sf::Vector2f(1280.f, 720.f));
+        curtain.setFillColor(sf::Color(8, 10, 18, 204));
+        window.draw(curtain);
+
+        sf::RectangleShape panel(sf::Vector2f(980.f, 560.f));
+        panel.setPosition(150.f, 90.f);
+        panel.setFillColor(sf::Color(30, 28, 22, 246));
+        panel.setOutlineThickness(2.f);
+        panel.setOutlineColor(sf::Color(255, 220, 150, 220));
+        window.draw(panel);
+
+        drawText("当前持有遗物总览", 182.f, 112.f, 34, sf::Color(250, 238, 180));
+
+        sf::RectangleShape closeBtn(sf::Vector2f(relicOverlayCloseRect.width, relicOverlayCloseRect.height));
+        closeBtn.setPosition(relicOverlayCloseRect.left, relicOverlayCloseRect.top);
+        closeBtn.setFillColor(sf::Color(90, 56, 56, 230));
+        closeBtn.setOutlineThickness(2.f);
+        closeBtn.setOutlineColor(sf::Color(0, 0, 0, 180));
+        window.draw(closeBtn);
+        drawText("关闭遗物总览", relicOverlayCloseRect.left + 24.f, relicOverlayCloseRect.top + 9.f, 22, sf::Color::White);
+
+        if (relics.empty()) {
+            drawText("当前尚未获得遗物", 182.f, 176.f, 24, sf::Color(255, 198, 198));
+            return;
+        }
+
+        float y = 172.f;
+        for (size_t i = 0; i < relics.size(); ++i) {
+            drawText(std::to_string(static_cast<int>(i) + 1) + ". " + relicName(relics[i]), 182.f, y, 24, sf::Color(240, 232, 212));
+            drawText(relicDesc(relics[i]), 420.f, y + 2.f, 20, sf::Color(218, 206, 180));
+            y += 38.f;
+            if (y > 616.f) {
+                break;
+            }
+        }
+    }
+
+    void renderPileButtons() {
+        auto drawPileButton = [&](const sf::FloatRect& rect, const std::string& label, int count, const sf::Color& color, bool active) {
+            sf::RectangleShape btn(sf::Vector2f(rect.width, rect.height));
+            btn.setPosition(rect.left, rect.top);
+            btn.setFillColor(active ? sf::Color(color.r, color.g, color.b, 255) : sf::Color(color.r, color.g, color.b, 220));
+            btn.setOutlineThickness(2.f);
+            btn.setOutlineColor(active ? sf::Color(255, 244, 188) : sf::Color(18, 18, 18, 200));
+            window.draw(btn);
+            drawText(label, rect.left + 9.f, rect.top + 7.f, 18, sf::Color::White);
+            drawText("数量 " + std::to_string(count), rect.left + 9.f, rect.top + 31.f, 16, sf::Color(230, 230, 220));
+        };
+
+        drawPileButton(drawPileRect, "抽牌堆", static_cast<int>(drawPile.size()), sf::Color(56, 94, 126), activePileOverlay == PileOverlayType::Draw);
+        drawPileButton(discardPileRect, "弃牌堆", static_cast<int>(discardPile.size()), sf::Color(106, 84, 60), activePileOverlay == PileOverlayType::Discard);
+        drawPileButton(exhaustPileRect, "消耗堆", static_cast<int>(exhaustPile.size()), sf::Color(104, 62, 78), activePileOverlay == PileOverlayType::Exhaust);
+    }
+
+    void renderPileOverlay() {
+        if (activePileOverlay == PileOverlayType::None) {
+            return;
+        }
+
+        const std::vector<int>* source = nullptr;
+        std::string title;
+        if (activePileOverlay == PileOverlayType::Draw) {
+            source = &drawPile;
+            title = "抽牌堆";
+        } else if (activePileOverlay == PileOverlayType::Discard) {
+            source = &discardPile;
+            title = "弃牌堆";
+        } else {
+            source = &exhaustPile;
+            title = "消耗堆";
+        }
+
+        sf::RectangleShape curtain(sf::Vector2f(1280.f, 720.f));
+        curtain.setFillColor(sf::Color(9, 11, 18, 180));
+        window.draw(curtain);
+
+        sf::RectangleShape panel(sf::Vector2f(860.f, 520.f));
+        panel.setPosition(210.f, 100.f);
+        panel.setFillColor(sf::Color(26, 34, 46, 245));
+        panel.setOutlineThickness(2.f);
+        panel.setOutlineColor(sf::Color(255, 224, 156, 210));
+        window.draw(panel);
+
+        drawText(title + "总览", 238.f, 122.f, 34, sf::Color(252, 240, 188));
+        drawText("顶端在上方，点击左下按钮可切换堆", 238.f, 160.f, 18, sf::Color(210, 210, 210));
+
+        sf::RectangleShape closeBtn(sf::Vector2f(pileOverlayCloseRect.width, pileOverlayCloseRect.height));
+        closeBtn.setPosition(pileOverlayCloseRect.left, pileOverlayCloseRect.top);
+        closeBtn.setFillColor(sf::Color(88, 54, 54, 230));
+        closeBtn.setOutlineThickness(2.f);
+        closeBtn.setOutlineColor(sf::Color(0, 0, 0, 180));
+        window.draw(closeBtn);
+        drawText("关闭牌堆总览", pileOverlayCloseRect.left + 24.f, pileOverlayCloseRect.top + 9.f, 22, sf::Color::White);
+
+        if (source == nullptr || source->empty()) {
+            drawText("当前牌堆为空", 238.f, 210.f, 26, sf::Color(255, 192, 192));
+            return;
+        }
+
+        float y = 206.f;
+        int shown = 0;
+        for (auto it = source->rbegin(); it != source->rend(); ++it) {
+            const CardDef* c = findCard(*it);
+            if (!c) {
+                continue;
+            }
+            drawText(std::to_string(shown + 1) + ". " + c->name, 238.f, y, 22, sf::Color(236, 236, 236));
+            drawText("费 " + std::to_string(c->cost) + "  " + c->desc, 430.f, y + 2.f, 18, sf::Color(192, 208, 224));
+            y += 30.f;
+            shown++;
+            if (y > 584.f) {
+                break;
+            }
+        }
+
+        if (shown < static_cast<int>(source->size())) {
+            drawText("已显示前 " + std::to_string(shown) + " 张，共 " + std::to_string(source->size()) + " 张", 238.f, 588.f, 18, sf::Color(206, 206, 206));
+        }
     }
 
     void renderBattle() {
         renderStatusPanel();
+        renderPileButtons();
 
-        sf::RectangleShape enemyPanel(sf::Vector2f(360.f, 260.f));
-        enemyPanel.setPosition(440.f, 185.f);
-        enemyPanel.setFillColor(sf::Color(35, 43, 58, 220));
+        sf::RectangleShape enemyInfoPanel(sf::Vector2f(320.f, 120.f));
+        enemyInfoPanel.setPosition(920.f, 128.f);
+        enemyInfoPanel.setFillColor(sf::Color(53, 43, 33, 230));
+        enemyInfoPanel.setOutlineThickness(2.f);
+        enemyInfoPanel.setOutlineColor(sf::Color(255, 226, 150, 220));
+        window.draw(enemyInfoPanel);
+
+        if (currentEnemyIndex >= 0 && currentEnemyIndex < static_cast<int>(enemySequence.size())) {
+            const EnemyDef& def = enemySequence[currentEnemyIndex];
+            drawText(def.name, 932.f, 136.f, 19, sf::Color(255, 224, 172));
+        }
+
+        std::ostringstream e;
+        e << "生命 " << enemy.hp << "/" << enemy.maxHp << "  格挡 " << enemy.block;
+        drawText(e.str(), 932.f, 162.f, 17, sf::Color(236, 208, 208));
+        drawText("力量 " + std::to_string(enemy.strength) + "  虚弱 " + std::to_string(enemy.weak) + "  易伤 " + std::to_string(enemy.vulnerable),
+             932.f, 184.f, 17, sf::Color(232, 200, 200));
+
+        const Intent& intent = currentEnemyIntent();
+        drawTextureFit(intentTex, sf::FloatRect(932.f, 208.f, 22.f, 22.f));
+        drawText("意图：" + intent.label, 962.f, 207.f, 16, sf::Color(255, 235, 150));
+
+        sf::RectangleShape enemyPanel(sf::Vector2f(440.f, 280.f));
+        enemyPanel.setPosition(420.f, 146.f);
+        enemyPanel.setFillColor(sf::Color(28, 46, 55, 220));
         enemyPanel.setOutlineThickness(2.f);
-        enemyPanel.setOutlineColor(sf::Color(0, 0, 0, 170));
+        enemyPanel.setOutlineColor(sf::Color(198, 223, 228, 140));
         window.draw(enemyPanel);
-        drawTextureFit(*enemyPortrait(), sf::FloatRect(520.f, 205.f, 200.f, 200.f));
+        const sf::FloatRect portraitRect = enemyPortraitRect();
+        drawTextureFit(*enemyPortrait(), portraitRect);
 
         if (pendingEnemy.active && !pendingEnemy.resolved) {
-            sf::RectangleShape windup(sf::Vector2f(210.f, 38.f));
-            windup.setPosition(515.f, 176.f);
+            sf::RectangleShape windup(sf::Vector2f(198.f, 36.f));
+            windup.setPosition(538.f, 146.f);
             windup.setFillColor(sf::Color(150, 90, 40, 210));
             windup.setOutlineThickness(2.f);
             windup.setOutlineColor(sf::Color(0, 0, 0, 180));
             window.draw(windup);
-            drawText("敌人蓄力中...", 542.f, 184.f, 20, sf::Color::White);
+            drawText("敌人蓄力中...", 560.f, 153.f, 18, sf::Color::White);
+        }
+
+        if (battleQuoteTimer > 0.0f && !battleQuoteText.empty()) {
+            sf::RectangleShape quoteBox(sf::Vector2f(300.f, 56.f));
+            quoteBox.setPosition(836.f, 258.f);
+            quoteBox.setFillColor(sf::Color(42, 34, 28, 228));
+            quoteBox.setOutlineThickness(2.f);
+            quoteBox.setOutlineColor(sf::Color(255, 211, 140, 210));
+            window.draw(quoteBox);
+            drawWrappedText(battleQuoteText, 848.f, 270.f, 15, sf::Color(255, 236, 188), 16);
         }
 
         if (enemyHitFlashTimer > 0.0f) {
             const float ratio = std::min(1.0f, enemyHitFlashTimer / 0.22f);
-            sf::RectangleShape enemyFlash(sf::Vector2f(360.f, 260.f));
-            enemyFlash.setPosition(440.f, 185.f);
+            sf::RectangleShape enemyFlash(sf::Vector2f(440.f, 280.f));
+            enemyFlash.setPosition(420.f, 146.f);
             enemyFlash.setFillColor(sf::Color(255, 255, 255, static_cast<sf::Uint8>(30.f + ratio * 120.f)));
             window.draw(enemyFlash);
         }
 
         sf::RectangleShape endTurn(sf::Vector2f(endTurnRect.width, endTurnRect.height));
         endTurn.setPosition(endTurnRect.left, endTurnRect.top);
-        endTurn.setFillColor(sf::Color(45, 130, 70));
+        endTurn.setFillColor(sf::Color(54, 146, 92));
         endTurn.setOutlineThickness(2.f);
-        endTurn.setOutlineColor(sf::Color::Black);
+        endTurn.setOutlineColor(sf::Color(232, 248, 218, 130));
         window.draw(endTurn);
-        drawText("结束回合", endTurnRect.left + 20.f, endTurnRect.top + 21.f, 26, sf::Color::White);
+        drawText("结束回合", endTurnRect.left + 8.f, endTurnRect.top + 10.f, 18, sf::Color::White);
 
         sf::RectangleShape potionBtn(sf::Vector2f(potionRect.width, potionRect.height));
         potionBtn.setPosition(potionRect.left, potionRect.top);
@@ -2373,6 +3153,8 @@ private:
         potionBtn.setOutlineThickness(2.f);
         potionBtn.setOutlineColor(sf::Color(15, 15, 15, 190));
         window.draw(potionBtn);
+        drawText("药剂 " + std::to_string(potionCount) + "/" + std::to_string(potionMax), potionRect.left + 7.f, potionRect.top + 8.f, 13, sf::Color(245, 235, 180));
+        drawText("+10格挡 抽1", potionRect.left + 7.f, potionRect.top + 28.f, 12, sf::Color(220, 220, 220));
 
         auto rects = handRects();
         for (size_t i = 0; i < hand.size(); ++i) {
@@ -2394,8 +3176,8 @@ private:
 
             drawText(c->name, rects[i].left + 6.f, rects[i].top + 8.f - hoverLift, 16, sf::Color::White);
             drawText("费 " + std::to_string(c->cost), rects[i].left + 6.f, rects[i].top + 30.f - hoverLift, 14, sf::Color::White);
-            drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 70.f, rects[i].top + 6.f - hoverLift, 34.f, 34.f));
-            drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 56.f - hoverLift, 13, sf::Color(240, 240, 240), 8);
+            drawTextureFit(*cardIcon(c->type), sf::FloatRect(rects[i].left + 56.f, rects[i].top + 6.f - hoverLift, 30.f, 30.f));
+            drawWrappedText(c->desc, rects[i].left + 6.f, rects[i].top + 55.f - hoverLift, 13, sf::Color(240, 240, 240), 7);
         }
 
         if (pendingCard.active) {
@@ -2421,21 +3203,36 @@ private:
         if (turnBannerTimer > 0.0f) {
             const float t = std::min(1.0f, turnBannerTimer / 1.1f);
             const sf::Uint8 alpha = static_cast<sf::Uint8>(60.f + t * 140.f);
-            sf::RectangleShape banner(sf::Vector2f(220.f, 46.f));
-            banner.setPosition(530.f, 174.f);
+            sf::RectangleShape banner(sf::Vector2f(206.f, 42.f));
+            banner.setPosition(470.f, 146.f);
             banner.setFillColor(sf::Color(55, 118, 70, alpha));
             banner.setOutlineThickness(2.f);
             banner.setOutlineColor(sf::Color(0, 0, 0, static_cast<sf::Uint8>(alpha)));
             window.draw(banner);
-            drawText("你的回合", 592.f, 184.f, 24, sf::Color(255, 255, 255, alpha));
+            drawText("你的回合", 528.f, 154.f, 22, sf::Color(255, 255, 255, alpha));
         }
 
-        float logY = 185.f;
-        drawText("战斗日志", 20.f, logY, 20, sf::Color(220, 220, 220));
-        logY += 28.f;
+        sf::RectangleShape logPanel(sf::Vector2f(260.f, 272.f));
+        logPanel.setPosition(20.f, 164.f);
+        logPanel.setFillColor(sf::Color(20, 28, 36, 214));
+        logPanel.setOutlineThickness(2.f);
+        logPanel.setOutlineColor(sf::Color(222, 208, 164, 120));
+        window.draw(logPanel);
+
+        const float logLeft = 34.f;
+        float logY = 176.f;
+        drawText("战斗日志", logLeft, logY, 20, sf::Color(232, 226, 196));
+        logY += 27.f;
+        const float logBottom = 424.f;
+        const float logLineHeight = 13.f * 1.25f;
         for (const auto& line : logs) {
-            drawWrappedText(line, 20.f, logY, 12, sf::Color(215, 215, 215), 26);
-            logY += 16.f;
+            const int lines = wrappedLineCount(line, 16);
+            const float nextLogY = logY + static_cast<float>(lines) * logLineHeight + 3.f;
+            if (nextLogY > logBottom) {
+                break;
+            }
+            drawWrappedText(line, logLeft, logY, 13, sf::Color(232, 232, 230), 16);
+            logY = nextLogY;
         }
 
         for (const auto& item : floatingTexts) {
@@ -2447,6 +3244,20 @@ private:
 
         drawText(std::string("T：动画") + (enableCombatAnimations ? "开" : "关"), 180.f, 680.f, 18, sf::Color(180, 180, 180));
         drawText("R：重新开始本局", 20.f, 680.f, 18, sf::Color(180, 180, 180));
+
+        if (showOwnedDeckOverlay) {
+            renderOwnedDeckOverlay();
+            return;
+        }
+
+        if (showRelicOverlay) {
+            renderRelicOverlay();
+            return;
+        }
+
+        if (activePileOverlay != PileOverlayType::None) {
+            renderPileOverlay();
+        }
     }
 
     void renderReward() {
@@ -2577,8 +3388,10 @@ private:
 
     void renderMainMenu() {
         drawTextureFit(logoTex, sf::FloatRect(550.f, 90.f, 180.f, 180.f));
-        drawText("迷你尖塔 Demo", 480.f, 70.f, 52, sf::Color(255, 245, 230));
+        drawText("尖塔战士", 520.f, 70.f, 52, sf::Color(255, 245, 230));
         drawText("铁甲战士的十五层试炼", 500.f, 255.f, 30, sf::Color(230, 230, 210));
+        drawWrappedText(storylineIntro(), 332.f, 120.f, 22, sf::Color(230, 222, 202), 28);
+        drawWrappedText(storylineGoal(), 300.f, 154.f, 20, sf::Color(216, 216, 196), 34);
 
         drawButton(menuStartRect, "开始游戏", sf::Color(58, 135, 86, 235));
         drawButton(menuExitRect, "退出游戏", sf::Color(146, 72, 72, 235));
@@ -2612,28 +3425,28 @@ private:
     }
 
     void render() {
-        window.clear(sf::Color(16, 20, 30));
+        window.clear(sf::Color(14, 24, 30));
 
         sf::VertexArray bg(sf::Quads, 4);
         bg[0].position = sf::Vector2f(0.f, 0.f);
         bg[1].position = sf::Vector2f(1280.f, 0.f);
         bg[2].position = sf::Vector2f(1280.f, 720.f);
         bg[3].position = sf::Vector2f(0.f, 720.f);
-        bg[0].color = sf::Color(30, 36, 56);
-        bg[1].color = sf::Color(42, 32, 54);
-        bg[2].color = sf::Color(20, 24, 38);
-        bg[3].color = sf::Color(17, 21, 33);
+        bg[0].color = sf::Color(24, 45, 56);
+        bg[1].color = sf::Color(50, 42, 30);
+        bg[2].color = sf::Color(18, 32, 40);
+        bg[3].color = sf::Color(15, 26, 35);
         window.draw(bg);
 
         const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(std::clock()) * 0.0018f);
         sf::CircleShape glowA(220.f);
         glowA.setPosition(920.f, -90.f);
-        glowA.setFillColor(sf::Color(255, 185, 90, static_cast<sf::Uint8>(22 + pulse * 26.f)));
+        glowA.setFillColor(sf::Color(255, 198, 104, static_cast<sf::Uint8>(22 + pulse * 26.f)));
         window.draw(glowA);
 
         sf::CircleShape glowB(280.f);
         glowB.setPosition(-120.f, 420.f);
-        glowB.setFillColor(sf::Color(90, 160, 255, static_cast<sf::Uint8>(16 + pulse * 20.f)));
+        glowB.setFillColor(sf::Color(84, 188, 182, static_cast<sf::Uint8>(16 + pulse * 20.f)));
         window.draw(glowB);
 
         if (phase == Phase::MainMenu) {
