@@ -552,8 +552,8 @@ private:
 
     sf::FloatRect endTurnRect{1146.f, 530.f, 94.f, 40.f};
     sf::FloatRect potionRect{1168.f, 422.f, 102.f, 52.f};
-    sf::FloatRect menuStartRect{470.f, 320.f, 340.f, 82.f};
-    sf::FloatRect menuExitRect{470.f, 430.f, 340.f, 82.f};
+    sf::FloatRect menuStartRect{470.f, 430.f, 340.f, 82.f};
+    sf::FloatRect menuExitRect{470.f, 540.f, 340.f, 82.f};
     sf::FloatRect backMenuRect{470.f, 560.f, 340.f, 72.f};
     sf::FloatRect campRestRect{270.f, 320.f, 320.f, 90.f};
     sf::FloatRect campForgeRect{700.f, 320.f, 320.f, 90.f};
@@ -2690,6 +2690,78 @@ private:
         }
     }
 
+    void drawCenteredWrappedText(const std::string& text, float y, unsigned int size, sf::Color color, int maxCharsPerLine) {
+        if (!hasFont) {
+            return;
+        }
+        if (maxCharsPerLine <= 0) {
+            sf::Text t;
+            t.setFont(font);
+            t.setString(sf::String::fromUtf8(text.begin(), text.end()));
+            t.setCharacterSize(size);
+            const sf::FloatRect bounds = t.getLocalBounds();
+            const float x = (1280.f - bounds.width) * 0.5f;
+            t.setPosition(x, y);
+            t.setFillColor(color);
+            window.draw(t);
+            return;
+        }
+
+        const sf::String utfText = sf::String::fromUtf8(text.begin(), text.end());
+
+        sf::String line;
+        int charCount = 0;
+        float offsetY = 0.0f;
+        for (std::size_t i = 0; i < utfText.getSize(); ++i) {
+            const sf::Uint32 codepoint = utfText[i];
+
+            if (codepoint == '\n') {
+                sf::Text t;
+                t.setFont(font);
+                t.setString(line);
+                t.setCharacterSize(size);
+                const sf::FloatRect bounds = t.getLocalBounds();
+                const float x = (1280.f - bounds.width) * 0.5f;
+                t.setPosition(x, y + offsetY);
+                t.setFillColor(color);
+                window.draw(t);
+                line.clear();
+                charCount = 0;
+                offsetY += static_cast<float>(size) * 1.25f;
+                continue;
+            }
+
+            line += codepoint;
+            charCount++;
+            if (charCount >= maxCharsPerLine) {
+                sf::Text t;
+                t.setFont(font);
+                t.setString(line);
+                t.setCharacterSize(size);
+                const sf::FloatRect bounds = t.getLocalBounds();
+                const float x = (1280.f - bounds.width) * 0.5f;
+                t.setPosition(x, y + offsetY);
+                t.setFillColor(color);
+                window.draw(t);
+                line.clear();
+                charCount = 0;
+                offsetY += static_cast<float>(size) * 1.25f;
+            }
+        }
+
+        if (line.getSize() > 0) {
+            sf::Text t;
+            t.setFont(font);
+            t.setString(line);
+            t.setCharacterSize(size);
+            const sf::FloatRect bounds = t.getLocalBounds();
+            const float x = (1280.f - bounds.width) * 0.5f;
+            t.setPosition(x, y + offsetY);
+            t.setFillColor(color);
+            window.draw(t);
+        }
+    }
+
     int wrappedLineCount(const std::string& text, int maxCharsPerLine) const {
         if (text.empty()) {
             return 1;
@@ -3387,18 +3459,18 @@ private:
     }
 
     void renderMainMenu() {
-        drawTextureFit(logoTex, sf::FloatRect(550.f, 90.f, 180.f, 180.f));
-        drawText("尖塔战士", 520.f, 70.f, 52, sf::Color(255, 245, 230));
-        drawText("铁甲战士的十五层试炼", 500.f, 255.f, 30, sf::Color(230, 230, 210));
-        drawWrappedText(storylineIntro(), 332.f, 120.f, 22, sf::Color(230, 222, 202), 28);
-        drawWrappedText(storylineGoal(), 300.f, 154.f, 20, sf::Color(216, 216, 196), 34);
+        drawTextureFit(logoTex, sf::FloatRect(430.f, 54.f, 96.f, 96.f));
+        drawText("尖塔战士", 534.f, 58.f, 72, sf::Color(35, 28, 18, 190));
+        drawText("尖塔战士", 528.f, 52.f, 72, sf::Color(255, 246, 214));
+        drawCenteredWrappedText(storylineIntro(), 236.f, 20, sf::Color(232, 224, 204), 60);
+        drawCenteredWrappedText(storylineGoal(), 272.f, 19, sf::Color(220, 220, 198), 60);
 
         drawButton(menuStartRect, "开始游戏", sf::Color(58, 135, 86, 235));
         drawButton(menuExitRect, "退出游戏", sf::Color(146, 72, 72, 235));
         drawTextureFit(startTex, sf::FloatRect(menuStartRect.left + 30.f, menuStartRect.top + 22.f, 38.f, 38.f));
         drawTextureFit(exitTex, sf::FloatRect(menuExitRect.left + 30.f, menuExitRect.top + 22.f, 38.f, 38.f));
 
-        drawText("点击按钮进行选择", 520.f, 540.f, 24, sf::Color(210, 210, 220));
+        drawText("点击按钮进行选择", 520.f, 646.f, 24, sf::Color(210, 210, 220));
         drawText("累计通关：" + std::to_string(totalWins), 20.f, 680.f, 20, sf::Color(220, 220, 180));
     }
 
