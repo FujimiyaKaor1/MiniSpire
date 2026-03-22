@@ -4493,7 +4493,9 @@ private:
             renderDefeat();
         }
 
-        renderBgmToggle();
+        if (phase != Phase::MainMenu) {
+            renderBgmToggle();
+        }
         if (phase == Phase::Battle) {
             renderDevTest();
         }
