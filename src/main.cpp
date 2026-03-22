@@ -1,6 +1,27 @@
+/**
+ * MiniSpireSFML - 一款类《杀戮尖塔》的卡牌 roguelike 游戏
+ * 
+ * 项目概述：
+ * - 单文件架构，所有游戏逻辑集中在 main.cpp 中
+ * - 使用 SFML 库进行图形渲染和音频播放
+ * - 支持跨平台编译（Windows/Linux/macOS）
+ * 
+ * 核心系统：
+ * - 卡牌战斗系统：支持攻击、技能、能力三种卡牌类型
+ * - 敌人AI系统：基于意图模式的敌人行为
+ * - 遗物系统：提供被动增益效果
+ * - 事件系统：随机事件增加游戏变数
+ * - 商店系统：购买卡牌、遗物、药水
+ * 
+ * 作者：杨立鑫、宋金林
+ */
+
 #include <SFML/Graphics.hpp>
 
-// SFML Audio is optional - gracefully degrades when unavailable
+// ============================================================================
+// 音频系统配置
+// SFML Audio 是可选模块，不可用时优雅降级
+// ============================================================================
 #ifndef USE_AUDIO
 #define USE_AUDIO 0
 #endif
@@ -12,154 +33,315 @@
 #if USE_AUDIO
 using SfxBuffer = sf::SoundBuffer;
 #else
-struct SfxBuffer {};
+struct SfxBuffer {};  // 空结构体占位，编译期兼容
 #endif
 
-#include <algorithm>
-#include <cctype>
-#include <cmath>
-#include <ctime>
-#include <cstdint>
-#include <deque>
-#include <fstream>
-#include <iostream>
-#include <filesystem>
-#include <random>
-#include <sstream>
-#include <stdexcept>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
-#include <vector>
+// ============================================================================
+// 标准库头文件
+// ============================================================================
+#include <algorithm>      // std::find, std::remove_if 等算法
+#include <cctype>         // 字符处理
+#include <cmath>          // 数学函数
+#include <ctime>          // 时间函数
+#include <cstdint>        // 固定宽度整数类型
+#include <deque>          // 双端队列（用于战斗日志）
+#include <fstream>        // 文件流（配置读取）
+#include <iostream>       // 标准输入输出
+#include <filesystem>     // 文件系统操作
+#include <random>         // 随机数生成器
+#include <sstream>        // 字符串流
+#include <stdexcept>      // 异常类
+#include <string>         // 字符串
+#include <unordered_map>  // 哈希映射（卡牌查找）
+#include <unordered_set>  // 哈希集合
+#include <vector>         // 动态数组
 
+// ============================================================================
+// 枚举类型定义
+// ============================================================================
+
+/**
+ * @brief 卡牌类型枚举
+ * - Attack: 攻击牌，造成伤害
+ * - Skill: 技能牌，提供格挡或效果
+ * - Power: 能力牌，持续生效的增益
+ */
 enum class CardType { Attack, Skill, Power };
-enum class Phase { MainMenu, Battle, Reward, Campfire, Shop, Event, DeckEdit, VictoryThanks, Credits, Defeat };
-enum class RoomType { Battle, Campfire, Shop, Event };
-enum class DeckEditMode { None, UpgradeOne, RemoveOne, RemoveTwo };
-enum class PileOverlayType { None, Draw, Discard, Exhaust, Deck };
-enum class RelicType { EmberCharm, IronSigil, BloodVial, TacticianLens, ThornEmblem };
 
+/**
+ * @brief 游戏阶段枚举
+ * 控制游戏状态机，决定当前渲染和交互逻辑
+ */
+enum class Phase { 
+    MainMenu,       // 主菜单
+    Battle,         // 战斗场景
+    Reward,         // 奖励选择
+    Campfire,       // 营火休息
+    Shop,           // 商店
+    Event,          // 随机事件
+    DeckEdit,       // 牌组编辑（升级/删除）
+    VictoryThanks,  // 胜利感谢页
+    Credits,        // 制作人名单
+    Defeat,         // 战败页面
+    Rules           // 玩法介绍
+};
+
+/**
+ * @brief 房间类型枚举
+ * 用于地图生成和场景切换
+ */
+enum class RoomType { 
+    Battle,     // 战斗房间
+    Campfire,   // 营火房间
+    Shop,       // 商店房间
+    Event       // 事件房间
+};
+
+/**
+ * @brief 牌组编辑模式
+ * 控制牌组编辑界面的行为
+ */
+enum class DeckEditMode { 
+    None,       // 无编辑
+    UpgradeOne, // 升级一张卡
+    RemoveOne,  // 删除一张卡
+    RemoveTwo   // 删除两张卡
+};
+
+/**
+ * @brief 牌堆覆盖层类型
+ * 用于显示不同牌堆的详细内容
+ */
+enum class PileOverlayType { 
+    None,       // 无覆盖层
+    Draw,       // 抽牌堆
+    Discard,    // 弃牌堆
+    Exhaust,    // 消耗堆
+    Deck        // 完整牌组
+};
+
+/**
+ * @brief 遗物类型枚举
+ * 每种遗物提供独特的被动效果
+ */
+enum class RelicType { 
+    EmberCharm,      // 余烬护符：每回合开始获得1能量
+    IronSigil,       // 铁纹章：战斗开始获得4格挡
+    BloodVial,       // 血瓶：战斗开始治疗2点生命
+    TacticianLens,   // 战术透镜：首回合多抽2张
+    ThornEmblem      // 荆棘徽记：受击反伤3点
+};
+
+// ============================================================================
+// 数据结构定义
+// ============================================================================
+
+/**
+ * @brief 卡牌定义结构体
+ * 存储一张卡牌的所有属性信息
+ * 
+ * @note 卡牌ID规则：
+ * - 1-44: 基础卡牌
+ * - 45-50: 新增卡牌
+ * - ID+100: 升级版卡牌（如ID=1的升级版为101）
+ */
 struct CardDef {
-    int id;
-    std::string name;
-    CardType type;
-    int cost;
-    int damage;
-    int hits;
-    int block;
-    int gainStrength;
-    int applyVulnerable;
-    int applyWeak;
-    int draw;
-    int gainEnergy;
-    int loseHp;
-    bool exhaust;
-    bool grantsStrengthPerTurn;
-    std::string desc;
-    bool healFromDamage = false;
-    bool grantsEnergyPerTurn = false;
-    bool redrawByExhaustingHand = false;
-    bool eventOnly = false;
+    int id;                     // 卡牌唯一标识符
+    std::string name;           // 卡牌名称（中文）
+    CardType type;              // 卡牌类型（攻击/技能/能力）
+    int cost;                   // 能量消耗
+    int damage;                 // 基础伤害值
+    int hits;                   // 攻击次数（用于多段攻击）
+    int block;                  // 提供的格挡值
+    int gainStrength;           // 获得的力量值
+    int applyVulnerable;        // 施加的易伤层数
+    int applyWeak;              // 施加的虚弱层数
+    int draw;                   // 抽牌数量
+    int gainEnergy;             // 获得的能量
+    int loseHp;                 // 失去的生命值（代价）
+    bool exhaust;               // 是否消耗（打出后移出本局游戏）
+    bool grantsStrengthPerTurn; // 是否每回合获得力量
+    std::string desc;           // 卡牌描述文本
+    
+    // 以下为扩展字段，有默认值
+    bool healFromDamage = false;        // 是否从伤害中治疗（吸血效果）
+    bool grantsEnergyPerTurn = false;   // 是否每回合获得能量
+    bool redrawByExhaustingHand = false;// 消耗手牌后是否重抽
+    bool eventOnly = false;             // 是否仅限事件获取（如邪恶之刃）
 };
 
+/**
+ * @brief 地图楼层节点
+ * 表示地图上的一个房间
+ */
 struct FloorNode {
-    RoomType type = RoomType::Battle;
-    int enemyIndex = -1;
-    int eventId = 0;
+    RoomType type = RoomType::Battle;   // 房间类型
+    int enemyIndex = -1;                 // 敌人索引（-1表示随机）
+    int eventId = 0;                     // 事件ID
 };
 
+/**
+ * @brief 敌人意图结构体
+ * 定义敌人回合的行动模式
+ * 
+ * @note 意图系统参考《杀戮尖塔》：
+ * - 敌人意图在玩家回合结束时确定
+ * - 玩家可以根据意图制定策略
+ */
 struct Intent {
-    std::string label;
-    int damage;
-    int hits;
-    int block;
-    int gainStrength;
-    int applyWeak;
-    int applyVulnerable;
+    std::string label;      // 意图标签（用于UI显示）
+    int damage;             // 伤害值
+    int hits;               // 攻击次数
+    int block;              // 获得的格挡
+    int gainStrength;       // 获得的力量
+    int applyWeak;          // 施加的虚弱
+    int applyVulnerable;    // 施加的易伤
 };
 
+/**
+ * @brief 敌人定义结构体
+ * 存储敌人的基础属性和行为模式
+ */
 struct EnemyDef {
-    std::string name;
-    int maxHp;
-    bool elite;
-    bool boss;
-    std::vector<Intent> pattern;
+    std::string name;           // 敌人名称
+    int maxHp;                  // 最大生命值
+    bool elite;                 // 是否为精英敌人
+    bool boss;                  // 是否为Boss
+    std::vector<Intent> pattern;// 意图模式循环
 };
 
+/**
+ * @brief 战斗单位状态
+ * 玩家和敌人共用的状态结构
+ */
 struct Combatant {
-    int hp = 0;
-    int maxHp = 0;
-    int block = 0;
-    int strength = 0;
-    int weak = 0;
-    int vulnerable = 0;
+    int hp = 0;             // 当前生命值
+    int maxHp = 0;          // 最大生命值
+    int block = 0;          // 当前格挡值
+    int strength = 0;       // 力量（增加伤害）
+    int weak = 0;           // 虚弱层数（减少伤害）
+    int vulnerable = 0;     // 易伤层数（受到更多伤害）
 };
 
+/**
+ * @brief 浮动文字效果
+ * 用于显示伤害/治疗等数字动画
+ */
 struct FloatingText {
-    sf::String text;
-    sf::Vector2f position;
-    sf::Vector2f velocity;
-    sf::Color color;
-    float remaining = 0.0f;
-    float duration = 0.0f;
+    sf::String text;        // 显示文本
+    sf::Vector2f position;  // 屏幕位置
+    sf::Vector2f velocity;  // 移动速度（向上飘动）
+    sf::Color color;        // 文字颜色
+    float remaining = 0.0f; // 剩余显示时间
+    float duration = 0.0f;  // 总显示时长
 };
 
+/**
+ * @brief 待处理的卡牌打出动画
+ * 用于卡牌打出时的动画效果
+ */
 struct PendingCardPlay {
-    bool active = false;
-    int handIndex = -1;
-    int cardId = -1;
-    float elapsed = 0.0f;
-    float duration = 0.16f;
-    sf::FloatRect fromRect;
-    sf::Vector2f target;
+    bool active = false;        // 是否正在播放动画
+    int handIndex = -1;         // 手牌索引
+    int cardId = -1;            // 卡牌ID
+    float elapsed = 0.0f;       // 已播放时间
+    float duration = 0.16f;     // 动画总时长（秒）
+    sf::FloatRect fromRect;     // 起始位置
+    sf::Vector2f target;        // 目标位置
 };
 
+/**
+ * @brief 待处理的敌人回合动画
+ * 控制敌人攻击的动画时序
+ */
 struct PendingEnemyTurn {
-    bool active = false;
-    bool resolved = false;
-    float elapsed = 0.0f;
-    float windup = 0.22f;
-    float recover = 0.12f;
+    bool active = false;        // 是否正在播放动画
+    bool resolved = false;      // 是否已执行伤害
+    float elapsed = 0.0f;       // 已播放时间
+    float windup = 0.22f;       // 前摇时间（攻击准备）
+    float recover = 0.12f;      // 后摇时间（攻击恢复）
 };
 
+/**
+ * @brief 应用配置结构体
+ * 从配置文件读取的运行时设置
+ */
 struct AppConfig {
-    unsigned int maxFps = 60;
-    bool enableAnimations = true;
-    bool enableFloatingText = true;
-    float textScale = 1.0f;
+    unsigned int maxFps = 60;           // 最大帧率
+    bool enableAnimations = true;       // 是否启用动画
+    bool enableFloatingText = true;     // 是否显示浮动文字
+    float textScale = 1.0f;             // 文字缩放比例
 };
 
+// ============================================================================
+// 游戏平衡性常量
+// 集中管理数值，便于调整游戏难度
+// ============================================================================
 namespace Balance {
-constexpr int kBaseTurnEnergy = 3;
-constexpr int kStartingMaxHp = 80;
-constexpr int kStartingGold = 99;
-constexpr int kStartingPotionCount = 1;
-constexpr int kStartingPotionMax = 4;
-constexpr int kStartingPotionCapacityPrice = 65;
-constexpr int kStartingDeckRemovePrice = 60;
-constexpr int kEliteRelicDropChance = 70;
-constexpr int kBloodVialHeal = 5;
+constexpr int kBaseTurnEnergy = 3;             // 每回合基础能量
+constexpr int kStartingMaxHp = 80;             // 初始最大生命值
+constexpr int kStartingGold = 99;              // 初始金币
+constexpr int kStartingPotionCount = 1;        // 初始药水数量
+constexpr int kStartingPotionMax = 4;          // 药水上限
+constexpr int kStartingPotionCapacityPrice = 65;   // 购买药水价格
+constexpr int kStartingDeckRemovePrice = 60;       // 删除卡牌价格
+constexpr int kEliteRelicDropChance = 70;          // 精英掉落遗物概率(%)
+constexpr int kBloodVialHeal = 5;                  // 血瓶治疗量
 } // namespace Balance
 
+/**
+ * @brief 游戏主类
+ * 
+ * 职责：
+ * - 管理游戏状态机（Phase）
+ * - 处理用户输入
+ * - 渲染游戏画面
+ * - 管理战斗、商店、事件等子系统
+ * 
+ * 设计模式：
+ * - 单例模式（隐式）：整个游戏只有一个Game实例
+ * - 状态模式：通过Phase枚举切换不同游戏阶段
+ * 
+ * @note 所有游戏逻辑都在此类中实现，采用单文件架构
+ */
 class Game {
 public:
+    /**
+     * @brief 生成默认地图布局
+     * @return 15层楼的房间配置
+     * 
+     * 地图结构：
+     * - 第1-2层：普通战斗（敌人0-1）
+     * - 第3层：营火
+     * - 第4-5层：战斗+精英（敌人2、4）
+     * - 第6层：商店
+     * - 第7层：战斗（敌人3）
+     * - 第8层：事件1
+     * - 第9层：营火
+     * - 第10层：精英战斗（敌人5）
+     * - 第11层：商店
+     * - 第12层：精英战斗（敌人6）
+     * - 第13层：事件2
+     * - 第14层：营火
+     * - 第15层：Boss战（敌人7）
+     */
     static std::vector<FloorNode> defaultFloorPlan() {
         return {
-            {RoomType::Battle, 0, 0},
-            {RoomType::Battle, 1, 0},
-            {RoomType::Campfire, -1, 0},
-            {RoomType::Battle, 2, 0},
-            {RoomType::Battle, 4, 0},
-            {RoomType::Shop, -1, 0},
-            {RoomType::Battle, 3, 0},
-            {RoomType::Event, -1, 1},
-            {RoomType::Campfire, -1, 0},
-            {RoomType::Battle, 5, 0},
-            {RoomType::Shop, -1, 0},
-            {RoomType::Battle, 6, 0},
-            {RoomType::Event, -1, 2},
-            {RoomType::Campfire, -1, 0},
-            {RoomType::Battle, 7, 0}
+            {RoomType::Battle, 0, 0},      // 第1层：普通敌人
+            {RoomType::Battle, 1, 0},      // 第2层：普通敌人
+            {RoomType::Campfire, -1, 0},   // 第3层：营火休息
+            {RoomType::Battle, 2, 0},      // 第4层：普通敌人
+            {RoomType::Battle, 4, 0},      // 第5层：精英敌人
+            {RoomType::Shop, -1, 0},       // 第6层：商店
+            {RoomType::Battle, 3, 0},      // 第7层：普通敌人
+            {RoomType::Event, -1, 1},      // 第8层：事件1
+            {RoomType::Campfire, -1, 0},   // 第9层：营火休息
+            {RoomType::Battle, 5, 0},      // 第10层：精英敌人
+            {RoomType::Shop, -1, 0},       // 第11层：商店
+            {RoomType::Battle, 6, 0},      // 第12层：精英敌人
+            {RoomType::Event, -1, 2},      // 第13层：事件2
+            {RoomType::Campfire, -1, 0},   // 第14层：营火休息
+            {RoomType::Battle, 7, 0}       // 第15层：Boss战
         };
     }
 
@@ -498,120 +680,153 @@ public:
     }
 
 private:
-    sf::RenderWindow window;
-    sf::Font font;
-    bool hasFont = false;
-    std::string loadedFontPath;
+    // ========================================================================
+    // SFML 图形资源
+    // ========================================================================
+    sf::RenderWindow window;        // 主窗口（1280x720）
+    sf::Font font;                  // 主字体
+    bool hasFont = false;           // 字体加载状态
+    std::string loadedFontPath;     // 已加载的字体路径
 
-    sf::Texture cardAttackTex;
-    sf::Texture cardSkillTex;
-    sf::Texture cardPowerTex;
-    sf::Texture enemy1Tex;
-    sf::Texture enemy2Tex;
-    sf::Texture enemy3Tex;
-    sf::Texture enemy4Tex;
-    sf::Texture elite1Tex;
-    sf::Texture elite2Tex;
-    sf::Texture elite3Tex;
-    sf::Texture eliteTex;
-    sf::Texture bossTex;
-    sf::Texture logoTex;
-    sf::Texture intentTex;
-    sf::Texture startTex;
-    sf::Texture exitTex;
-    sf::Texture thanksTex;
-    sf::Texture uiGoldTex;
-    sf::Texture uiPotionTex;
-    sf::Texture uiDeckTex;
-    sf::Texture uiRelicTex;
-    sf::Texture statHpTex;
-    sf::Texture statEnergyTex;
-    sf::Texture statBlockTex;
-    sf::Texture statStrengthTex;
+    // 卡牌类型纹理
+    sf::Texture cardAttackTex;      // 攻击牌背景
+    sf::Texture cardSkillTex;       // 技能牌背景
+    sf::Texture cardPowerTex;       // 能力牌背景
+    
+    // 敌人立绘纹理
+    sf::Texture enemy1Tex;          // 敌人1：狡猾狐狸
+    sf::Texture enemy2Tex;          // 敌人2：邪教徒
+    sf::Texture enemy3Tex;          // 敌人3：剧毒曼巴
+    sf::Texture enemy4Tex;          // 敌人4：刀盾卫兵
+    sf::Texture elite1Tex;          // 精英1：饿狼首领
+    sf::Texture elite2Tex;          // 精英2：鲜血斗士
+    sf::Texture elite3Tex;          // 精英3：诅咒祭司
+    sf::Texture eliteTex;           // 精英通用图标
+    sf::Texture bossTex;            // Boss：尖塔守卫
+    
+    // UI元素纹理
+    sf::Texture logoTex;            // 游戏Logo
+    sf::Texture intentTex;          // 敌人意图图标
+    sf::Texture startTex;           // 开始按钮图标
+    sf::Texture exitTex;            // 退出按钮图标
+    sf::Texture thanksTex;          // 感谢页面图标
+    sf::Texture uiGoldTex;          // 金币图标
+    sf::Texture uiPotionTex;        // 药水图标
+    sf::Texture uiDeckTex;          // 牌组图标
+    sf::Texture uiRelicTex;         // 遗物图标
+    
+    // 状态图标纹理
+    sf::Texture statHpTex;          // 生命值图标
+    sf::Texture statEnergyTex;      // 能量图标
+    sf::Texture statBlockTex;       // 格挡图标
+    sf::Texture statStrengthTex;    // 力量图标
 
-    sf::Texture bgMainMenu;
-    sf::Texture bgBattle;
-    sf::Texture bgCampfire;
-    sf::Texture bgShop;
-    sf::Texture bgEvent1;  // Event 1: 神殿祭坛
-    sf::Texture bgEvent2;  // Event 2: 森林小路
-    sf::Texture bgDefeat;
-    sf::Texture bgVictory;
+    // 场景背景纹理
+    sf::Texture bgMainMenu;         // 主菜单背景
+    sf::Texture bgBattle;           // 战斗背景
+    sf::Texture bgCampfire;         // 营火背景
+    sf::Texture bgShop;             // 商店背景
+    sf::Texture bgEvent1;           // 事件1背景：神殿祭坛
+    sf::Texture bgEvent2;           // 事件2背景：森林小路
+    sf::Texture bgDefeat;           // 战败背景
+    sf::Texture bgVictory;          // 胜利背景
 
-    std::string currentBgmPath;
-    SfxBuffer sfxSwordBuf;
-    SfxBuffer sfxPlayerHitBuf;
-    SfxBuffer sfxEnemyHitBuf;
-    SfxBuffer sfxCardPlayBuf;
-    SfxBuffer sfxBlockBuf;
-    SfxBuffer sfxHealBuf;
-    SfxBuffer sfxDefeatBuf;
-    SfxBuffer sfxVictoryBuf;
-    SfxBuffer sfxUiClickBuf;
-    float sfxCooldown = 0.0f;
+    // ========================================================================
+    // 音频资源
+    // ========================================================================
+    std::string currentBgmPath;     // 当前播放的BGM路径
+    SfxBuffer sfxSwordBuf;          // 剑攻击音效
+    SfxBuffer sfxPlayerHitBuf;      // 玩家受击音效
+    SfxBuffer sfxEnemyHitBuf;       // 敌人受击音效
+    SfxBuffer sfxCardPlayBuf;       // 打出卡牌音效
+    SfxBuffer sfxBlockBuf;          // 格挡音效
+    SfxBuffer sfxHealBuf;           // 治疗音效
+    SfxBuffer sfxDefeatBuf;         // 战败音效
+    SfxBuffer sfxVictoryBuf;        // 胜利音效
+    SfxBuffer sfxUiClickBuf;        // UI点击音效
+    float sfxCooldown = 0.0f;       // 音效冷却时间（防止重叠播放）
 
 #if USE_AUDIO
-    sf::Music bgmPlayer;
-    sf::Sound sfxPlayer;
+    sf::Music bgmPlayer;            // BGM播放器
+    sf::Sound sfxPlayer;            // 音效播放器
 #endif
 
-    std::mt19937 rng;
+    // ========================================================================
+    // 随机数生成器
+    // ========================================================================
+    std::mt19937 rng;               // Mersenne Twister随机数引擎
 
-    std::vector<CardDef> cardPool;
-    std::unordered_map<int, CardDef> cardsById;
-    std::vector<int> baseCardIds;
-    std::vector<EnemyDef> enemySequence;
-    std::vector<FloorNode> floorPlan;
-    std::vector<int> shopChoices;
+    // ========================================================================
+    // 游戏数据容器
+    // ========================================================================
+    std::vector<CardDef> cardPool;              // 所有可用卡牌定义
+    std::unordered_map<int, CardDef> cardsById; // 卡牌ID到定义的映射（O(1)查找）
+    std::vector<int> baseCardIds;               // 基础卡牌ID列表（不含升级版）
+    std::vector<EnemyDef> enemySequence;        // 敌人序列（按出现顺序）
+    std::vector<FloorNode> floorPlan;           // 地图楼层配置
+    std::vector<int> shopChoices;               // 商店可选卡牌ID
 
-    Phase phase = Phase::MainMenu;
-    int currentFloor = 0;
-    int currentEnemyIndex = 0;
-    int currentEventId = 0;
-    float phaseTimer = 0.0f;
+    // ========================================================================
+    // 游戏状态变量
+    // ========================================================================
+    Phase phase = Phase::MainMenu;      // 当前游戏阶段
+    int currentFloor = 0;               // 当前楼层（0-14）
+    int currentEnemyIndex = 0;          // 当前敌人索引
+    int currentEventId = 0;             // 当前事件ID
+    float phaseTimer = 0.0f;            // 阶段计时器（用于过渡动画）
 
-    Combatant player;
-    Combatant enemy;
-    int enemyIntentIndex = 0;
+    // ========================================================================
+    // 战斗状态
+    // ========================================================================
+    Combatant player;                   // 玩家状态
+    Combatant enemy;                    // 敌人状态
+    int enemyIntentIndex = 0;           // 敌人当前意图索引（循环模式）
 
-    int playerEnergy = Balance::kBaseTurnEnergy;
-    int playerStrengthPerTurn = 0;
-    int playerEnergyPerTurn = 0;
-    int totalWins = 0;
-    int gold = Balance::kStartingGold;
-    int potionCount = Balance::kStartingPotionCount;
-    int potionMax = Balance::kStartingPotionMax;
-    int potionCapacityPrice = Balance::kStartingPotionCapacityPrice;
-    int deckRemovePrice = Balance::kStartingDeckRemovePrice;
-    bool potionPurchasedThisRun = false;
-    int eliteRelicDropChance = Balance::kEliteRelicDropChance;
-    bool campfireDidAction = false;
-    DeckEditMode deckEditMode = DeckEditMode::None;
-    int deckEditRemaining = 0;
-    int rampageDamageBonus = 0;
-    bool blockPersists = false;
-    bool darkEmbraceActive = false;
-    bool tearActive = false;
+    int playerEnergy = Balance::kBaseTurnEnergy;    // 当前能量
+    int playerStrengthPerTurn = 0;                  // 每回合获得的力量（薪火之源效果）
+    int playerEnergyPerTurn = 0;                    // 每回合获得的能量
+    int totalWins = 0;                              // 累计通关次数（持久化存储）
+    int gold = Balance::kStartingGold;              // 当前金币
+    int potionCount = Balance::kStartingPotionCount;// 当前药水数量
+    int potionMax = Balance::kStartingPotionMax;    // 药水上限
+    int potionCapacityPrice = Balance::kStartingPotionCapacityPrice; // 购买药水价格
+    int deckRemovePrice = Balance::kStartingDeckRemovePrice;         // 删除卡牌价格
+    bool potionPurchasedThisRun = false;            // 本场是否已购买药水（限购1瓶）
+    int eliteRelicDropChance = Balance::kEliteRelicDropChance;       // 精英掉落遗物概率
+    bool campfireDidAction = false;                 // 营火是否已执行动作
+    DeckEditMode deckEditMode = DeckEditMode::None; // 牌组编辑模式
+    int deckEditRemaining = 0;                      // 剩余编辑次数
+    int rampageDamageBonus = 0;                     // 暴走累计伤害加成
+    bool blockPersists = false;                     // 格挡是否持续（壁垒效果）
+    bool darkEmbraceActive = false;                 // 黑暗之拥是否激活
+    bool tearActive = false;                        // 撕裂是否激活
 
-    std::vector<int> masterDeck;
-    std::vector<int> drawPile;
-    std::vector<int> discardPile;
-    std::vector<int> hand;
-    std::vector<int> exhaustPile;
+    // ========================================================================
+    // 牌组与牌堆
+    // ========================================================================
+    std::vector<int> masterDeck;    // 主牌组（本场游戏的所有卡牌）
+    std::vector<int> drawPile;      // 抽牌堆
+    std::vector<int> discardPile;   // 弃牌堆
+    std::vector<int> hand;          // 手牌
+    std::vector<int> exhaustPile;   // 消耗堆
 
-    std::vector<int> rewardChoices;
-    int eliteRewardPicksRemaining = 0;
-    std::vector<RelicType> relics;
-    std::deque<std::string> logs;
-    std::vector<FloatingText> floatingTexts;
-    PendingCardPlay pendingCard;
-    PendingEnemyTurn pendingEnemy;
-    AppConfig config;
+    // ========================================================================
+    // 奖励与遗物
+    // ========================================================================
+    std::vector<int> rewardChoices;             // 奖励卡牌选项
+    int eliteRewardPicksRemaining = 0;          // 精英奖励剩余选择次数
+    std::vector<RelicType> relics;              // 已获得的遗物列表
+    std::deque<std::string> logs;               // 战斗日志（双端队列，限制长度）
+    std::vector<FloatingText> floatingTexts;    // 浮动文字效果列表
+    PendingCardPlay pendingCard;                // 待处理的卡牌动画
+    PendingEnemyTurn pendingEnemy;              // 待处理的敌人回合动画
+    AppConfig config;                           // 应用配置
 
     sf::FloatRect endTurnRect{1146.f, 530.f, 94.f, 40.f};
     sf::FloatRect potionRect{1168.f, 422.f, 102.f, 52.f};
-    sf::FloatRect menuStartRect{470.f, 430.f, 340.f, 82.f};
-    sf::FloatRect menuExitRect{470.f, 540.f, 340.f, 82.f};
+    sf::FloatRect menuStartRect{470.f, 380.f, 340.f, 82.f};
+    sf::FloatRect menuRulesRect{470.f, 480.f, 340.f, 82.f};
+    sf::FloatRect menuExitRect{470.f, 580.f, 340.f, 82.f};
     sf::FloatRect backMenuRect{470.f, 560.f, 340.f, 72.f};
     sf::FloatRect campRestRect{270.f, 320.f, 320.f, 90.f};
     sf::FloatRect campForgeRect{700.f, 320.f, 320.f, 90.f};
@@ -629,7 +844,8 @@ private:
     sf::FloatRect discardPileRect{1168.f, 300.f, 102.f, 52.f};
     sf::FloatRect exhaustPileRect{1168.f, 360.f, 102.f, 52.f};
     sf::FloatRect pileOverlayCloseRect{930.f, 130.f, 190.f, 42.f};
-    sf::FloatRect bgmToggleRect{1220.f, 680.f, 40.f, 20.f};
+    sf::FloatRect devTestRect{1220.f, 680.f, 40.f, 20.f};
+    sf::FloatRect bgmToggleRect{1170.f, 680.f, 40.f, 20.f};
 
     float enemyHitFlashTimer = 0.0f;
     float playerHitFlashTimer = 0.0f;
@@ -2005,6 +2221,20 @@ private:
         }
     }
 
+    /**
+     * @brief 开始战斗
+     * 
+     * 初始化战斗状态：
+     * 1. 重置牌堆（抽牌堆=主牌组，洗牌）
+     * 2. 清空手牌、弃牌堆、消耗堆
+     * 3. 重置玩家战斗状态（格挡、力量、debuff）
+     * 4. 初始化敌人（根据楼层调整难度）
+     * 5. 触发遗物效果
+     * 
+     * 敌人难度调整：
+     * - Boss血量 x1.6
+     * - 第6层起每层HP+5
+     */
     void startBattle() {
         if (currentEnemyIndex < 0 || currentEnemyIndex >= static_cast<int>(enemySequence.size())) {
             phase = Phase::MainMenu;
@@ -2126,6 +2356,14 @@ private:
         return 0;
     }
 
+    /**
+     * @brief 应用卡牌的持续成长效果
+     * @param card 卡牌定义
+     * 
+     * 处理能力牌的持续效果：
+     * - grantsStrengthPerTurn: 每回合开始获得力量
+     * - grantsEnergyPerTurn: 每回合开始获得能量
+     */
     void applyCardPersistentGrowthEffects(const CardDef& card) {
         if (card.grantsStrengthPerTurn) {
             playerStrengthPerTurn += 1;
@@ -2138,6 +2376,20 @@ private:
         }
     }
 
+    /**
+     * @brief 造成伤害的核心函数
+     * @param target 目标（玩家或敌人）
+     * @param damage 伤害值（已计算加成）
+     * @param targetIsPlayer 目标是否为玩家
+     * 
+     * 伤害计算流程：
+     * 1. 先扣除格挡（格挡不保留到下回合）
+     * 2. 剩余伤害扣除生命
+     * 3. 触发视觉反馈（闪烁、浮动文字）
+     * 4. 播放音效
+     * 
+     * @note 伤害值应该已经过adjustedDamage计算
+     */
     void dealDamage(Combatant& target, int damage, bool targetIsPlayer) {
         if (damage <= 0) {
             return;
@@ -2160,6 +2412,19 @@ private:
         }
     }
 
+    /**
+     * @brief 打出卡牌的核心函数
+     * @param handIndex 手牌索引
+     * 
+     * 执行流程：
+     * 1. 验证卡牌有效性
+     * 2. 检查能量是否足够
+     * 3. 执行卡牌效果（伤害、格挡、状态等）
+     * 4. 处理特殊效果（消耗、抽牌等）
+     * 5. 移动手牌到弃牌堆或消耗堆
+     * 
+     * @note 能量检查在调用前应该已经完成
+     */
     void applyCard(int handIndex) {
         if (handIndex < 0 || handIndex >= static_cast<int>(hand.size())) {
             return;
@@ -2626,6 +2891,19 @@ private:
         return def.pattern[enemyIntentIndex % def.pattern.size()];
     }
 
+    /**
+     * @brief 选择奖励卡牌
+     * @param index 选择的奖励索引
+     * 
+     * 奖励系统逻辑：
+     * - index 4: 查看牌组（不消耗奖励）
+     * - index 3 或 7: 跳过奖励
+     * - 其他: 选择对应卡牌加入牌组
+     * 
+     * 精英奖励特殊处理：
+     * - 精英敌人可以选择多张卡牌
+     * - 选择后减少剩余选择次数
+     */
     void pickReward(int index) {
         if (index == 4) {
             activePileOverlay = PileOverlayType::Deck;
@@ -2664,6 +2942,20 @@ private:
         goNextFloor();
     }
 
+    /**
+     * @brief 事件处理函数
+     * 
+     * 处理所有SFML窗口事件（键盘、鼠标）
+     * 
+     * 键盘快捷键：
+     * - R: 重置当前运行（战斗/奖励/战败阶段）
+     * - T: 切换动画效果
+     * - 任意键: 在胜利感谢页进入制作人名单
+     * 
+     * 鼠标事件：
+     * - 左键点击： 处理各阶段UI交互
+     * 
+     * @note 事件处理顺序很重要，先处理全局快捷键，     */
     void handleEvent(const sf::Event& event) {
         if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
             if (phase == Phase::Battle || phase == Phase::Reward || phase == Phase::Defeat) {
@@ -2721,13 +3013,34 @@ private:
                 resetRun();
                 return;
             }
+            if (menuRulesRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
+                phase = Phase::Rules;
+                return;
+            }
             if (menuExitRect.contains(mouse)) {
                 playSfx(sfxUiClickBuf, 50.f);
                 window.close();
                 return;
             }
+        } else if (phase == Phase::Rules) {
+            if (backMenuRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
+                phase = Phase::MainMenu;
+                return;
+            }
         } else if (phase == Phase::Battle) {
             if (pendingCard.active || pendingEnemy.active) {
+                return;
+            }
+
+            if (devTestRect.contains(mouse)) {
+                playSfx(sfxUiClickBuf, 50.f);
+                dealDamage(enemy, 999, false);
+                pushLog("开发者测试：造成999点伤害");
+                if (enemy.hp <= 0) {
+                    onBattleWon();
+                }
                 return;
             }
 
@@ -3584,6 +3897,21 @@ private:
         }
     }
 
+    /**
+     * @brief 渲染战斗场景
+     * 
+     * 战斗界面布局：
+     * - 左侧：玩家状态面板（HP、能量、格挡、力量）
+     * - 中间：敌人立绘和信息面板
+     * - 右侧：手牌区域
+     * - 底部：抽牌堆、弃牌堆按钮
+     * - 右下角：结束回合按钮
+     * 
+     * 动画效果：
+     * - 敌人受击闪烁（红色）
+     * - 玩家受击闪烁（红色）
+     * - 浮动文字（伤害/治疗数值）
+     */
     void renderBattle() {
         renderStatusPanel();
         renderPileButtons();
@@ -3900,6 +4228,15 @@ private:
         drawButton(deckDoneRect, "完成", sf::Color(76, 110, 140, 240));
     }
 
+    /**
+     * @brief 渲染主菜单
+     * 
+     * 显示内容：
+     * - 游戏Logo和标题
+     * - 故事背景介绍文本
+     * - 开始游戏/玩法介绍/退出游戏按钮
+     * - 累计通关次数
+     */
     void renderMainMenu() {
         drawTextureFit(logoTex, sf::FloatRect(430.f, 54.f, 96.f, 96.f));
         drawText("尖塔战士", 534.f, 58.f, 72, sf::Color(35, 28, 18, 190));
@@ -3908,12 +4245,72 @@ private:
         drawCenteredWrappedText(storylineGoal(), 272.f, 19, sf::Color(220, 220, 198), 60);
 
         drawButton(menuStartRect, "开始游戏", sf::Color(58, 135, 86, 235));
+        drawButton(menuRulesRect, "玩法介绍", sf::Color(56, 94, 126, 235));
         drawButton(menuExitRect, "退出游戏", sf::Color(146, 72, 72, 235));
         drawTextureFit(startTex, sf::FloatRect(menuStartRect.left + 30.f, menuStartRect.top + 22.f, 38.f, 38.f));
         drawTextureFit(exitTex, sf::FloatRect(menuExitRect.left + 30.f, menuExitRect.top + 22.f, 38.f, 38.f));
 
-        drawText("点击按钮进行选择", 520.f, 646.f, 24, sf::Color(210, 210, 220));
         drawText("累计通关：" + std::to_string(totalWins), 20.f, 680.f, 20, sf::Color(220, 220, 180));
+    }
+
+    /**
+     * @brief 渲染玩法介绍页面
+     * 
+     * 显示内容：
+     * - 游戏目标
+     * - 卡牌类型说明
+     * - 战斗流程
+     * - 快捷键说明
+     * - 返回按钮
+     */
+    void renderRules() {
+        drawText("玩法介绍", 520.f, 40.f, 56, sf::Color(255, 246, 214));
+        
+        float y = 120.f;
+        const float lineHeight = 28.f;
+        const float sectionGap = 16.f;
+        
+        drawText("【游戏目标】", 100.f, y, 26, sf::Color(255, 220, 150));
+        y += lineHeight + 4.f;
+        drawText("击败15层的Boss，通关游戏。", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight + sectionGap;
+        
+        drawText("【卡牌类型】", 100.f, y, 26, sf::Color(255, 220, 150));
+        y += lineHeight + 4.f;
+        drawText("攻击牌（红）：造成伤害", 120.f, y, 22, sf::Color(255, 150, 150));
+        y += lineHeight;
+        drawText("技能牌（蓝）：获得格挡或效果", 120.f, y, 22, sf::Color(150, 180, 255));
+        y += lineHeight;
+        drawText("能力牌（黄）：持续生效的增益", 120.f, y, 22, sf::Color(255, 255, 150));
+        y += lineHeight + sectionGap;
+        
+        drawText("【战斗流程】", 100.f, y, 26, sf::Color(255, 220, 150));
+        y += lineHeight + 4.f;
+        drawText("1. 抽牌阶段：每回合抽5张牌", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("2. 出牌阶段：消耗能量打出卡牌", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("3. 结束回合：弃掉所有手牌，敌人行动", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight + sectionGap;
+        
+        drawText("【状态效果】", 100.f, y, 26, sf::Color(255, 220, 150));
+        y += lineHeight + 4.f;
+        drawText("力量：增加攻击伤害", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("格挡：减少受到的伤害", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("虚弱：造成的伤害减少25%", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("易伤：受到的伤害增加50%", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight + sectionGap;
+        
+        drawText("【快捷键】", 100.f, y, 26, sf::Color(255, 220, 150));
+        y += lineHeight + 4.f;
+        drawText("R - 重置当前运行", 120.f, y, 22, sf::Color(220, 220, 220));
+        y += lineHeight;
+        drawText("T - 切换动画效果", 120.f, y, 22, sf::Color(220, 220, 220));
+        
+        drawButton(backMenuRect, "返回主菜单", sf::Color(86, 102, 145, 240));
     }
 
     void renderBgmToggle() {
@@ -3949,6 +4346,23 @@ private:
         drawText(bgmEnabled ? "开" : "关", bgmToggleRect.left + 12.f, bgmToggleRect.top + 2.f, 12, sf::Color::White);
     }
 
+    /**
+     * @brief 渲染开发者测试按钮
+     * 
+     * 显示内容：
+     * - 小型按钮，显示"测试"
+     * - 点击后对敌人造成999伤害
+     */
+    void renderDevTest() {
+        sf::RectangleShape btn(sf::Vector2f(devTestRect.width, devTestRect.height));
+        btn.setPosition(devTestRect.left, devTestRect.top);
+        btn.setFillColor(sf::Color(120, 60, 60, 220));
+        btn.setOutlineThickness(1.f);
+        btn.setOutlineColor(sf::Color(0, 0, 0, 180));
+        window.draw(btn);
+        drawText("测试", devTestRect.left + 6.f, devTestRect.top + 2.f, 12, sf::Color::White);
+    }
+
     void renderDefeat() {
         drawText("战败", 560.f, 200.f, 84, sf::Color(240, 120, 120));
         drawText("本次挑战未能击败 BOSS", 430.f, 320.f, 34, sf::Color(230, 230, 230));
@@ -3972,6 +4386,21 @@ private:
         drawButton(backMenuRect, "返回主菜单", sf::Color(86, 102, 145, 240));
     }
 
+    /**
+     * @brief 主渲染函数
+     * 
+     * 渲染流程：
+     * 1. 清空屏幕（深色背景）
+     * 2. 绘制场景背景
+     * 3. 根据当前阶段调用对应渲染函数
+     * 4. 绘制BGM开关按钮
+     * 5. 绘制浮动提示文字
+     * 6. 显示窗口内容
+     * 
+     * BGM切换逻辑：
+     * - 不同阶段播放不同的背景音乐
+     * - Boss胜利使用特殊BGM
+     */
     void render() {
         window.clear(sf::Color(14, 24, 30));
 
@@ -4042,6 +4471,8 @@ private:
 
         if (phase == Phase::MainMenu) {
             renderMainMenu();
+        } else if (phase == Phase::Rules) {
+            renderRules();
         } else if (phase == Phase::Battle) {
             renderBattle();
         } else if (phase == Phase::Reward) {
@@ -4063,6 +4494,9 @@ private:
         }
 
         renderBgmToggle();
+        if (phase == Phase::Battle) {
+            renderDevTest();
+        }
         renderActionHint();
 
         window.display();
