@@ -4189,7 +4189,7 @@ private:
         drawText("事件：救与不救", 470.f, 80.f, 54, sf::Color(250, 210, 170));
         drawWrappedText("一位看上去需要帮助的老人挡在路中央。你该如何选择？", 220.f, 190.f, 30, sf::Color(235, 235, 235), 24);
         drawButton(eventLeftRect, "施以援手，获得一件遗物", sf::Color(130, 100, 72, 240));
-        drawButton(eventRightRect, "绕路找到剪刀，移除2张卡", sf::Color(92, 118, 72, 240));
+        drawButton(eventRightRect, "漠不关心，移除2张卡", sf::Color(92, 118, 72, 240));
         drawText("选项影响：左+遗物，右移除2张卡", 408.f, 650.f, 22, sf::Color(230, 220, 190));
     }
 
@@ -4371,9 +4371,9 @@ private:
 
     void renderVictoryThanks() {
         drawTextureFit(thanksTex, sf::FloatRect(545.f, 170.f, 190.f, 190.f));
-        drawText("感谢游玩", 510.f, 110.f, 64, sf::Color(125, 240, 170));
-        drawText("尖塔的恶魔被你击败！", 430.f, 410.f, 30, sf::Color(236, 236, 236));
-        drawText("按任意键进入制作人名单", 440.f, 470.f, 24, sf::Color(210, 210, 220));
+        drawTextCentered("感谢游玩", 110.f, 64, sf::Color(125, 240, 170));
+        drawTextCentered("尖塔的恶魔被你击败！", 410.f, 30, sf::Color(236, 236, 236));
+        drawTextCentered("按任意键进入制作人名单", 470.f, 24, sf::Color(210, 210, 220));
     }
 
     void renderCredits() {
