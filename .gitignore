@@ -16,6 +16,7 @@ game_config.ini
 
 # IDE and editor files
 .idea/
+.trae/
 *.swp
 *.swo
 *~
