@@ -3,12 +3,44 @@
 
 # CMake intermediate files
 CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
 
 # Runtime/local files
 save_progress.dat
+game_config.ini
 
 # VS Code workspace local cache
 .vscode/*.code-workspace
 
+# IDE and editor files
+.idea/
+*.swp
+*.swo
+*~
+
 # Temporary folders
 *.tmp
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Compiled executables (optional - uncomment if you don't want to track)
+# *.exe
+# *.dll
+
+# Debug files
+*.pdb
+*.ilk
+*.log
+
+# Sensitive files - NEVER commit these
+.env
+.env.local
+*.pem
+*.key
+secrets.json
+credentials.json

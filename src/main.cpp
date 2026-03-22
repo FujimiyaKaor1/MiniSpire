@@ -13,7 +13,7 @@
  * - 事件系统：随机事件增加游戏变数
  * - 商店系统：购买卡牌、遗物、药水
  * 
- * 作者：杨立鑫、宋金林
+ * 作者：FujimiyaKaor1
  */
 
 #include <SFML/Graphics.hpp>
@@ -4378,11 +4378,11 @@ private:
 
     void renderCredits() {
         drawTextCentered("制作人名单", 90.f, 62, sf::Color(250, 230, 170));
-        drawTextCentered("策划：杨立鑫", 200.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("程序：杨立鑫", 250.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("美术：杨立鑫", 300.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("音频：杨立鑫", 350.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("测试：宋金林", 400.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("策划：FujimiyaKaor1", 200.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("程序：FujimiyaKaor1", 250.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("美术：FujimiyaKaor1", 300.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("音频：FujimiyaKaor1", 350.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("测试：FujimiyaKaor1", 400.f, 34, sf::Color(235, 235, 235));
         drawButton(backMenuRect, "返回主菜单", sf::Color(86, 102, 145, 240));
     }
 
