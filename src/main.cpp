@@ -135,8 +135,8 @@ constexpr int kStartingMaxHp = 80;
 constexpr int kStartingGold = 99;
 constexpr int kStartingPotionCount = 1;
 constexpr int kStartingPotionMax = 4;
-constexpr int kStartingPotionCapacityPrice = 85;
-constexpr int kStartingDeckRemovePrice = 70;
+constexpr int kStartingPotionCapacityPrice = 65;
+constexpr int kStartingDeckRemovePrice = 60;
 constexpr int kEliteRelicDropChance = 70;
 constexpr int kBloodVialHeal = 5;
 } // namespace Balance
@@ -583,6 +583,7 @@ private:
     int potionMax = Balance::kStartingPotionMax;
     int potionCapacityPrice = Balance::kStartingPotionCapacityPrice;
     int deckRemovePrice = Balance::kStartingDeckRemovePrice;
+    bool potionPurchasedThisRun = false;
     int eliteRelicDropChance = Balance::kEliteRelicDropChance;
     bool campfireDidAction = false;
     DeckEditMode deckEditMode = DeckEditMode::None;
@@ -628,7 +629,7 @@ private:
     sf::FloatRect discardPileRect{1168.f, 300.f, 102.f, 52.f};
     sf::FloatRect exhaustPileRect{1168.f, 360.f, 102.f, 52.f};
     sf::FloatRect pileOverlayCloseRect{930.f, 130.f, 190.f, 42.f};
-    sf::FloatRect bgmToggleRect{1180.f, 660.f, 80.f, 40.f};
+    sf::FloatRect bgmToggleRect{1220.f, 680.f, 40.f, 20.f};
 
     float enemyHitFlashTimer = 0.0f;
     float playerHitFlashTimer = 0.0f;
@@ -977,11 +978,11 @@ private:
 
     std::string enemyEntranceQuote(int enemyIndex) const {
         switch (enemyIndex) {
-            case 0: return "黏液斗士：你的剑，会陷进我的身体。";
+            case 0: return "狡猾狐狸：嘿嘿，来抓我呀！";
             case 1: return "邪教徒：尖塔将吞下你的名字。";
-            case 2: return "寄生突袭者：痛苦会让你学会低头。";
+            case 2: return "剧毒曼巴：嘶嘶...毒液已准备好。";
             case 3: return "刀盾卫兵：此路到此为止。";
-            case 4: return "装甲骑士：让我听见你盔甲碎裂的声音。";
+            case 4: return "饿狼首领：嗷呜！我的獠牙会撕裂你！";
             case 5: return "鲜血斗士：鲜血，是唯一的誓言。";
             case 6: return "诅咒祭司：诅咒会比你先抵达终点。";
             case 7: return "尖塔守卫：你的火焰很亮，但终会熄灭。";
@@ -1286,7 +1287,7 @@ private:
         enemySequence.clear();
 
         enemySequence.push_back({
-            "普通敌人：黏液斗士", 45, false, false,
+            "普通敌人：狡猾狐狸", 45, false, false,
             {{"攻击 9", 9, 1, 0, 0, 0, 0}, {"格挡 8 + 攻击 6", 6, 1, 8, 0, 0, 0}, {"攻击 9", 9, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
@@ -1294,7 +1295,7 @@ private:
             {{"强化 +2 力量", 0, 1, 0, 2, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}, {"攻击 12", 12, 1, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "普通敌人：寄生突袭者", 65, false, false,
+            "普通敌人：剧毒曼巴", 65, false, false,
             {{"施加虚弱 1 + 攻击 8", 8, 1, 0, 0, 1, 0}, {"攻击 10", 10, 1, 0, 0, 0, 0}, {"格挡 10", 0, 1, 10, 0, 0, 0}}});
 
         enemySequence.push_back({
@@ -1302,7 +1303,7 @@ private:
             {{"攻击 10", 10, 1, 0, 0, 0, 0}, {"格挡 12", 0, 1, 12, 0, 0, 0}, {"攻击 8 x2", 8, 2, 0, 0, 0, 0}}});
 
         enemySequence.push_back({
-            "精英敌人：装甲骑士", 95, true, false,
+            "精英敌人：饿狼首领", 95, true, false,
             {{"格挡 12 + 强化 +1 力量", 0, 1, 12, 1, 0, 0}, {"攻击 14", 14, 1, 0, 0, 0, 0}, {"攻击 9 x2", 9, 2, 0, 0, 0, 0}, {"施加易伤 1 + 攻击 10", 10, 1, 0, 0, 0, 1}}});
 
         enemySequence.push_back({
@@ -1763,16 +1764,21 @@ private:
     }
 
     void tryBuyPotionCapacity() {
+        if (potionPurchasedThisRun) {
+            pushLog("本场游戏已购买过药水");
+            showActionHint("本场游戏限购1瓶", sf::Color(255, 190, 160));
+            return;
+        }
         if (gold < potionCapacityPrice) {
-            pushLog("金币不足，无法提升药剂上限");
+            pushLog("金币不足，无法购买药水");
             showActionHint("金币不足", sf::Color(255, 170, 170));
             return;
         }
         gold -= potionCapacityPrice;
-        potionMax += 1;
-        pushLog("药剂上限提升至 " + std::to_string(potionMax) + "（-" + std::to_string(potionCapacityPrice) + " 金币）");
-        showActionHint("药剂上限提升至 " + std::to_string(potionMax), sf::Color(180, 220, 255));
-        potionCapacityPrice += 45;
+        potionCount = std::min(potionCount + 1, potionMax);
+        potionPurchasedThisRun = true;
+        pushLog("购买药水（-" + std::to_string(potionCapacityPrice) + " 金币）");
+        showActionHint("获得1瓶药水", sf::Color(180, 220, 255));
     }
 
     void tryBuyRemoveService() {
@@ -2666,6 +2672,14 @@ private:
             return;
         }
 
+        if (event.type == sf::Event::KeyPressed) {
+            if (phase == Phase::VictoryThanks) {
+                transitionTo(Phase::Credits, "按键进入制作人名单");
+                phaseTimer = 0.0f;
+                return;
+            }
+        }
+
         if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::T) {
             enableCombatAnimations = !enableCombatAnimations;
             pushLog(std::string("动画效果：") + (enableCombatAnimations ? "开启" : "关闭"));
@@ -2995,11 +3009,6 @@ private:
         }
 
         if (phase == Phase::VictoryThanks) {
-            phaseTimer += dt;
-            if (phaseTimer >= 3.0f) {
-                transitionTo(Phase::Credits, "感谢页自动过渡");
-                phaseTimer = 0.0f;
-            }
         }
     }
 
@@ -3213,11 +3222,11 @@ private:
             return &enemy1Tex;
         }
         switch (currentEnemyIndex) {
-            case 0: return &enemy1Tex; // 黏液斗士
+            case 0: return &enemy1Tex; // 狡猾狐狸
             case 1: return &enemy2Tex; // 邪教徒
-            case 2: return &enemy3Tex; // 寄生突袭者
+            case 2: return &enemy3Tex; // 剧毒曼巴
             case 3: return &enemy4Tex; // 刀盾卫兵
-            case 4: return &elite1Tex; // 装甲骑士
+            case 4: return &elite1Tex; // 饿狼首领
             case 5: return &elite2Tex; // 鲜血斗士
             case 6: return &elite3Tex; // 诅咒祭司
             case 7: return &bossTex;   // 尖塔守卫
@@ -3834,7 +3843,7 @@ private:
         }
 
         drawButton(shopLeaveRect, "离开商店（下一层）", sf::Color(72, 98, 126, 240));
-        drawButton(shopPotionRect, "提升药剂上限（" + std::to_string(potionCapacityPrice) + "金币）", sf::Color(92, 76, 136, 240));
+        drawButton(shopPotionRect, "购买药水（" + std::to_string(potionCapacityPrice) + "金币）", sf::Color(92, 76, 136, 240));
         drawButton(shopRemoveRect, "移除1张卡（" + std::to_string(deckRemovePrice) + "金币）", sf::Color(138, 82, 72, 240));
         drawText("红色价格代表金币不足", 940.f, 380.f, 20, sf::Color(255, 160, 160));
     }
@@ -3911,10 +3920,33 @@ private:
         sf::RectangleShape btn(sf::Vector2f(bgmToggleRect.width, bgmToggleRect.height));
         btn.setPosition(bgmToggleRect.left, bgmToggleRect.top);
         btn.setFillColor(bgmEnabled ? sf::Color(56, 94, 126, 220) : sf::Color(80, 60, 60, 220));
-        btn.setOutlineThickness(2.f);
+        btn.setOutlineThickness(1.f);
         btn.setOutlineColor(sf::Color(0, 0, 0, 180));
         window.draw(btn);
-        drawText(bgmEnabled ? "BGM开" : "BGM关", bgmToggleRect.left + 8.f, bgmToggleRect.top + 8.f, 18, sf::Color::White);
+
+        float speakerX = bgmToggleRect.left - 18.f;
+        float speakerY = bgmToggleRect.top + 3.f;
+        sf::Color speakerColor = bgmEnabled ? sf::Color(200, 220, 255) : sf::Color(150, 130, 130);
+
+        sf::ConvexShape speaker;
+        speaker.setPointCount(4);
+        speaker.setPoint(0, sf::Vector2f(speakerX, speakerY + 4.f));
+        speaker.setPoint(1, sf::Vector2f(speakerX + 6.f, speakerY + 4.f));
+        speaker.setPoint(2, sf::Vector2f(speakerX + 6.f, speakerY + 12.f));
+        speaker.setPoint(3, sf::Vector2f(speakerX, speakerY + 12.f));
+        speaker.setFillColor(speakerColor);
+        window.draw(speaker);
+
+        sf::ConvexShape horn;
+        horn.setPointCount(4);
+        horn.setPoint(0, sf::Vector2f(speakerX + 6.f, speakerY + 2.f));
+        horn.setPoint(1, sf::Vector2f(speakerX + 14.f, speakerY - 2.f));
+        horn.setPoint(2, sf::Vector2f(speakerX + 14.f, speakerY + 18.f));
+        horn.setPoint(3, sf::Vector2f(speakerX + 6.f, speakerY + 14.f));
+        horn.setFillColor(speakerColor);
+        window.draw(horn);
+
+        drawText(bgmEnabled ? "开" : "关", bgmToggleRect.left + 12.f, bgmToggleRect.top + 2.f, 12, sf::Color::White);
     }
 
     void renderDefeat() {
@@ -3926,16 +3958,17 @@ private:
     void renderVictoryThanks() {
         drawTextureFit(thanksTex, sf::FloatRect(545.f, 170.f, 190.f, 190.f));
         drawText("感谢游玩", 510.f, 110.f, 64, sf::Color(125, 240, 170));
-        drawText("你已击败 BOSS，正在进入制作人名单...", 340.f, 410.f, 30, sf::Color(236, 236, 236));
-        drawText("点击可跳过等待", 530.f, 470.f, 24, sf::Color(210, 210, 220));
+        drawText("尖塔的恶魔被你击败！", 430.f, 410.f, 30, sf::Color(236, 236, 236));
+        drawText("按任意键进入制作人名单", 440.f, 470.f, 24, sf::Color(210, 210, 220));
     }
 
     void renderCredits() {
         drawTextCentered("制作人名单", 90.f, 62, sf::Color(250, 230, 170));
-        drawTextCentered("策划：杨立鑫", 230.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("程序：杨立鑫", 290.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("美术：宋金林", 350.f, 34, sf::Color(235, 235, 235));
-        drawTextCentered("音频：宋金林", 410.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("策划：杨立鑫", 200.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("程序：杨立鑫", 250.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("美术：杨立鑫", 300.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("音频：杨立鑫", 350.f, 34, sf::Color(235, 235, 235));
+        drawTextCentered("测试：宋金林", 400.f, 34, sf::Color(235, 235, 235));
         drawButton(backMenuRect, "返回主菜单", sf::Color(86, 102, 145, 240));
     }
 
